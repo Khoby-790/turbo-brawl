@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Turbo Brawl</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bungee&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#14121c; --panel:rgba(22,20,32,.92); --line:rgba(255,255,255,.12); --ink:#f4f1ea; --muted:#a8a3b5; --hot:#ff5a1f; --hot2:#ffc53d; }
+  * { box-sizing:border-box; }
+  html,body { margin:0; height:100%; background:var(--bg); color:var(--ink); font-family:Inter,system-ui,sans-serif; overflow:hidden; touch-action:none; }
+  canvas { display:block; position:fixed; inset:0; width:100%; height:100%; }
+  .screen { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; padding:16px; z-index:5; }
+  .hidden { display:none !important; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:18px; padding:28px; width:min(440px,100%); box-shadow:0 20px 60px rgba(0,0,0,.5); backdrop-filter:blur(6px); max-height:calc(100vh - 32px); overflow:auto; }
+  h1 { font-family:Bungee,Impact,sans-serif; font-weight:400; font-size:clamp(34px,9vw,52px); margin:0 0 4px; line-height:1; letter-spacing:1px;
+       background:linear-gradient(180deg,var(--hot2),var(--hot)); -webkit-background-clip:text; background-clip:text; color:transparent; transform:skewX(-8deg); }
+  h2 { font-family:Bungee,Impact,sans-serif; font-weight:400; margin:0 0 14px; font-size:26px; }
+  .sub { color:var(--muted); margin:0 0 22px; font-size:14px; }
+  label { display:block; font-size:12px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); margin:14px 0 6px; font-weight:600; }
+  input, select { width:100%; padding:12px 14px; border-radius:10px; border:1px solid var(--line); background:#0d0c14; color:var(--ink); font:inherit; font-size:16px; }
+  input:focus, select:focus { outline:2px solid var(--hot); border-color:transparent; }
+  button { font:inherit; font-weight:800; cursor:pointer; border:0; border-radius:12px; padding:13px 16px; font-size:16px; color:#1a0f05;
+           background:linear-gradient(180deg,var(--hot2),var(--hot)); box-shadow:0 4px 0 #9b2f0a; transition:transform .05s; width:100%; }
+  button:active { transform:translateY(3px); box-shadow:0 1px 0 #9b2f0a; }
+  button.ghost { background:transparent; color:var(--ink); border:1px solid var(--line); box-shadow:none; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  .row { display:flex; gap:10px; margin-top:16px; }
+  .row > * { flex:1; }
+  .or { text-align:center; color:var(--muted); font-size:12px; margin:16px 0 0; }
+  .players { list-style:none; padding:0; margin:0; display:grid; gap:6px; }
+  .players li { display:flex; align-items:center; gap:10px; padding:9px 12px; background:#0d0c14; border-radius:10px; border:1px solid var(--line); }
+  .dot { width:14px; height:14px; border-radius:4px; flex:none; }
+  .tag { margin-left:auto; font-size:11px; color:var(--hot2); font-weight:800; letter-spacing:.06em; }
+  .code { font-family:Bungee,monospace; font-size:34px; letter-spacing:6px; color:var(--hot2); }
+  .share { display:flex; gap:8px; align-items:center; margin-bottom:6px; }
+  .share button { width:auto; padding:9px 12px; font-size:13px; }
+  .note { font-size:13px; color:var(--muted); margin-top:12px; }
+  .err { color:#ff6b6b; font-size:14px; margin-top:10px; min-height:1em; }
+  .grid3 { display:grid; grid-template-columns:2fr 1fr 1fr; gap:10px; }
+  table { width:100%; border-collapse:collapse; margin-bottom:16px; }
+  td { padding:8px 6px; border-bottom:1px solid var(--line); }
+  td.pos { font-family:Bungee,sans-serif; width:40px; color:var(--hot2); }
+  td.time { text-align:right; font-variant-numeric:tabular-nums; color:var(--muted); }
+  .keys { font-size:12px; color:var(--muted); margin-top:18px; line-height:1.7; }
+  kbd { background:#0d0c14; border:1px solid var(--line); border-bottom-width:2px; border-radius:5px; padding:1px 6px; font-family:inherit; font-size:11px; }
+  #chat { position:fixed; left:16px; bottom:16px; z-index:4; width:min(320px,calc(100% - 32px)); pointer-events:none; }
+  #chatlog div { background:rgba(0,0,0,.45); padding:4px 8px; border-radius:6px; margin-top:4px; font-size:13px; width:fit-content; max-width:100%; }
+  #chatin { pointer-events:auto; margin-top:6px; padding:8px 10px; font-size:14px; }
+  #touch { position:fixed; inset:auto 0 0 0; z-index:4; display:flex; justify-content:space-between; padding:16px; pointer-events:none; }
+  #touch .grp { display:flex; gap:12px; align-items:flex-end; }
+  .tb { pointer-events:auto; width:72px; height:72px; border-radius:50%; background:rgba(255,255,255,.14); border:2px solid rgba(255,255,255,.3);
+        display:flex; align-items:center; justify-content:center; font-size:26px; user-select:none; -webkit-user-select:none; color:#fff; }
+  .tb.on { background:rgba(255,140,40,.55); }
+  .tb.item { width:64px; height:64px; font-size:14px; font-weight:800; margin-bottom:84px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="menu" class="screen">
+  <div class="card">
+    <h1>Turbo Brawl</h1>
+    <p class="sub">Online arcade combat racing. Grab boxes, fire rockets, drop oil, and boost past your friends.</p>
+    <label for="name">Driver name</label>
+    <input id="name" maxlength="14" placeholder="Your name" autocomplete="off">
+    <div class="row"><button id="createBtn">Create race</button></div>
+    <p class="or">— or join a friend —</p>
+    <div class="row">
+      <input id="roomCode" maxlength="4" placeholder="Room code" style="text-transform:uppercase">
+      <button id="joinBtn" class="ghost">Join</button>
+    </div>
+    <div class="err" id="menuErr"></div>
+    <div class="keys">
+      <kbd>↑</kbd><kbd>W</kbd> gas &nbsp; <kbd>↓</kbd><kbd>S</kbd> brake &nbsp; <kbd>←</kbd><kbd>→</kbd> steer<br>
+      <kbd>Space</kbd> use item &nbsp; <kbd>Enter</kbd> chat &nbsp; <kbd>M</kbd> mute
+    </div>
+  </div>
+</div>
+
+<div id="lobby" class="screen hidden">
+  <div class="card">
+    <h2>Garage</h2>
+    <label>Room code</label>
+    <div class="share"><span class="code" id="lobbyCode">----</span><button class="ghost" id="copyBtn">Copy invite link</button></div>
+    <label>Drivers</label>
+    <ul class="players" id="playerList"></ul>
+    <div class="grid3">
+      <div><label for="trackSel">Track</label><select id="trackSel"></select></div>
+      <div><label for="lapSel">Laps</label><select id="lapSel"></select></div>
+      <div><label for="botSel">CPU</label><select id="botSel"></select></div>
+    </div>
+    <div class="row"><button id="startBtn">Start race</button></div>
+    <div class="note" id="lobbyNote"></div>
+  </div>
+</div>
+
+<div id="results" class="screen hidden">
+  <div class="card">
+    <h2>Results</h2>
+    <table id="resTable"></table>
+    <button id="againBtn">Back to garage</button>
+    <div class="note" id="resNote"></div>
+  </div>
+</div>
+
+<div id="chat" class="hidden"><div id="chatlog"></div><input id="chatin" class="hidden" maxlength="120" placeholder="Say something…"></div>
+
+<div id="touch" class="hidden">
+  <div class="grp"><div class="tb" data-k="left">◀</div><div class="tb" data-k="right">▶</div></div>
+  <div class="grp"><div class="tb item" data-k="fire">ITEM</div><div class="tb" data-k="down">▼</div><div class="tb" data-k="up">▲</div></div>
+</div>
+
+<script src="shared.js"></script>
+<script src="game.js"></script>
+</body>
+</html>

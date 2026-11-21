@@ -1,0 +1,9 @@
+{
+  "name": "turbo-brawl",
+  "version": "1.0.0",
+  "description": "Online multiplayer arcade combat racer",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": { "ws": "^8.18.0" }
+}
