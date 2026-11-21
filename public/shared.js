@@ -265,12 +265,15 @@
     let k = spd < 70 ? 1 - spd / 70 : 0;
     if (u < -20 && brk && Math.abs(v) < Math.abs(u)) k = 1;
     if (k > 0) {
-      const wk = (u * Math.tan(delta)) / (PHYS.A + PHYS.B);
+      // pressing gas/reverse at a standstill still lets you pivot slowly (wheels scrub round)
+      const pivot = thr ? 60 : brk ? -60 : 0;
+      const ue = Math.abs(u) < Math.abs(pivot) ? pivot : u;
+      const wk = (ue * Math.tan(delta)) / (PHYS.A + PHYS.B);
       w = w * (1 - k) + wk * k;
       v *= 1 - k * 8 * h;
     }
     if (!thr && !brk && Math.abs(u) < 4) u = 0;
-    if (c.spin > 0) w = Math.sign(w || 1) * Math.max(Math.abs(w), 7);
+    if (c.spin > 0 && c.spinDur) w = (c.spinDir * Math.PI * 2) / c.spinDur;
 
     c.a = wrapAngle(c.a + w * h);
     c.w = w;
@@ -293,22 +296,44 @@
         const tx = p.dx, ty = p.dy, vt = c.vx * tx + c.vy * ty;
         const scrub = Math.min(1, vn / 900) * 0.5 + 0.04;
         c.vx -= tx * vt * scrub; c.vy -= ty * vt * scrub;
-        c.w += -side * vn * 0.006 * Math.sign(vt || 1);
+        c.w += -side * vn * 0.0025 * Math.sign(vt || 1);
         c.crash = Math.max(c.crash, vn);
       }
+      // scrape-and-align: if the car is pointed into the wall, swing it to run along it
+      if (c.spin <= 0) {
+        const dirSign = c.sp < -5 ? -1 : 1;
+        const headInto = (Math.cos(c.a) * p.nx + Math.sin(c.a) * p.ny) * side * dirSign;
+        if (headInto > 0.05) {
+          let dA = wrapAngle(p.ang - c.a);
+          if (Math.abs(dA) > 1.75) dA = wrapAngle(dA + Math.PI); // align with whichever direction is closer
+          const rate = (2.4 + Math.abs(c.sp) / 140) * h;
+          c.a = wrapAngle(c.a + clamp(dA, -rate, rate));
+          c.w *= 0.85;
+        }
+      }
+      c.wallT = 0.25;
     }
   }
 
   // Advance one car. inp = {up, down, left, right, hand} or {up, down, steer:-1..1, hand}
   function stepCar(c, inp, dt, track, capMul) {
     capMul = capMul || 1;
+    if (c.spin > 0 && c.spin0 === undefined) { c.spin0 = c.a; c.spinDir = Math.sign(c.w || 1); c.spinDur = c.spin; }
     if (c.spin > 0) c.spin -= dt;
+    if (c.wallT > 0) c.wallT -= dt;
+    if (c.ghost > 0) c.ghost -= dt;
     if (c.boost > 0) c.boost -= dt;
     if (c.shield > 0) c.shield -= dt;
     const nr = nearest(track, c.x, c.y, c.ni);
     c.ni = nr.i;
     const n = Math.max(1, Math.ceil(dt / (1 / 120)));
     for (let i = 0; i < n; i++) substep(c, inp, dt / n, track, capMul);
+    if (c.spin <= 0 && c.spin0 !== undefined) {
+      // spin finished: settle facing the way we were going
+      c.a = c.spin0; c.w = 0; c.spin0 = undefined; c.spinDur = 0;
+      const sp = Math.hypot(c.vx, c.vy);
+      c.vx = Math.cos(c.a) * sp; c.vy = Math.sin(c.a) * sp;
+    }
     const p = track.pts[c.ni];
     let ds = p.s - c.ps;
     if (ds < -track.len / 2) ds += track.len;
@@ -317,8 +342,22 @@
     c.ps = p.s;
   }
 
+  // Put a car back on the racing line, facing the right way (the "reset" button).
+  function resetCar(track, c) {
+    const k = (c.ni - 3 + track.N) % track.N, p = track.pts[k];
+    c.x = p.x; c.y = p.y; c.a = p.ang;
+    c.vx = c.vy = c.w = c.sp = c.lat = c.steer = 0;
+    c.spin = 0; c.spin0 = undefined; c.boost = 0; c.gear = 1;
+    c.ni = k; c.ghost = 1.5; c.stuck = 0; c.rev = 0;
+    let ds = p.s - c.ps;
+    if (ds < -track.len / 2) ds += track.len;
+    if (ds > track.len / 2) ds -= track.len;
+    c.total += ds; c.ps = p.s;
+  }
+
   // Car-to-car impulse. Moves only the cars flagged movable. Returns impact speed.
   function collide(a, b, moveA, moveB) {
+    if (a.ghost > 0 || b.ghost > 0) return 0;
     const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy), R = 32;
     if (d >= R || d === 0) return 0;
     const nx = dx / d, ny = dy / d, pen = R - d;
@@ -371,12 +410,16 @@
   }
 
   // Call once per AI tick: detects being stuck against a wall and backs out.
-  function botRecover(c, dt) {
+  function botRecover(c, dt, track) {
     if (c.rev > 0) { c.rev -= dt; return; }
-    if (Math.abs(c.sp) < 30 && c.spin <= 0) c.stuck += dt; else c.stuck = 0;
-    if (c.stuck > 1.2) { c.rev = 0.9; c.stuck = 0; c.revSteer = c.steer || 1; }
+    if (Math.abs(c.sp) < 30 && c.spin <= 0) c.stuck += dt; else { c.stuck = 0; if (c.sp > 200) c.tries = 0; }
+    if (c.stuck > 1.2) {
+      c.tries = (c.tries || 0) + 1; c.stuck = 0;
+      if (c.tries > 2 && track) { resetCar(track, c); c.tries = 0; }
+      else { c.rev = 0.9; c.revSteer = c.steer || 1; }
+    }
   }
 
-  return { TRACKS, ITEMS, PHYS, BOX_RESPAWN_MS, buildTrack, nearest, makeCar, stepCar, collide,
+  return { TRACKS, ITEMS, PHYS, BOX_RESPAWN_MS, buildTrack, nearest, makeCar, stepCar, collide, resetCar,
     botInput, botRecover, wrapAngle };
 });

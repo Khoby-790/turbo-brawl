@@ -181,7 +181,7 @@ $('chatin').addEventListener('keydown', e => {
 
 // ---------------- input ----------------
 const KEYMAP = { ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', ArrowLeft: 'left', KeyA: 'left',
-  ArrowRight: 'right', KeyD: 'right', Space: 'hand', KeyE: 'fire', ShiftLeft: 'fire', ShiftRight: 'fire', KeyX: 'fire' };
+  ArrowRight: 'right', KeyD: 'right', Space: 'hand', KeyE: 'fire', ShiftLeft: 'fire', ShiftRight: 'fire', KeyX: 'fire', KeyR: 'reset' };
 addEventListener('keydown', e => {
   if (document.activeElement && document.activeElement.tagName === 'INPUT') return;
   if (e.code === 'Enter' && myId) { $('chatin').classList.remove('hidden'); $('chatin').focus(); e.preventDefault(); return; }
@@ -243,7 +243,7 @@ function startGame(m) {
     objs: new Map(), parts: new Particles(scene), skids: new Skids(scene),
     item: null, itemFlash: 0, pending: false, lastSend: 0, firedLatch: false,
     lapShown: 1, lapBanner: 0, shake: 0, camYaw: me.a, camPos: null, fov: 64,
-    prevU: 0, prevV: 0, roll: 0, pitch: 0, dmg: 0, wrongWay: 0, mySkid: null, sentFinish: false,
+    prevU: 0, prevV: 0, stuckT: 0, lastReset: -1e9, resetLatch: false, roll: 0, pitch: 0, dmg: 0, wrongWay: 0, mySkid: null, sentFinish: false,
   };
   show(null);
 }
@@ -267,7 +267,7 @@ function onSnap(m) {
     if (s.id === myId) { if (s.fin) game.me.fin = s.fin; continue; }
     const c = game.cars.get(s.id);
     if (!c) continue;
-    c.tx = s.x; c.ty = s.y; c.ta = s.a; c.sp = s.sp; c.total = s.total; c.f = s.f; c.fin = s.fin; c.stT = s.st || 0;
+    c.tx = s.x; c.ty = s.y; c.ta = s.a; c.sp = s.sp; c.total = s.total; c.f = s.f; c.fin = s.fin; c.stT = s.st || 0; c.ghost = s.f & 16 ? 1 : 0;
   }
 }
 
@@ -363,6 +363,18 @@ function update(dt, now) {
 
   if (inp('fire') && !g.firedLatch && racing && !finished) useItem();
   g.firedLatch = inp('fire');
+
+  // reset onto the track (R / touch button), with a short cooldown
+  if (inp('reset') && !g.resetLatch && racing && !finished && now - g.lastReset > 1500) {
+    S.resetCar(track, me);
+    g.lastReset = now; g.last = null; g.stuckSince = 0; g.wrongWay = 0;
+    g.camYaw = me.a; g.camPos = null;
+    Snd.tone(520, 0.12, 'triangle', 0.08); Snd.tone(780, 0.16, 'triangle', 0.06);
+  }
+  g.resetLatch = inp('reset');
+  const stuckNow = racing && !finished && Math.abs(me.sp) < 40 && me.spin <= 0;
+  if (!stuckNow) g.stuckSince = 0; else if (!g.stuckSince) g.stuckSince = now;
+  g.stuckT = g.stuckSince ? (now - g.stuckSince) / 1000 : 0;
 
   // wrong way detection
   const tp = track.pts[me.ni];
@@ -466,7 +478,7 @@ function update(dt, now) {
     g.lastSend = now;
     send({ t: 'state', x: +me.x.toFixed(1), y: +me.y.toFixed(1), a: +me.a.toFixed(3), sp: Math.round(me.sp),
       vx: Math.round(me.vx), vy: Math.round(me.vy), st: +me.steer.toFixed(2), br: me.braking ? 1 : 0,
-      total: Math.round(me.total), spin: +me.spin.toFixed(2), boost: +me.boost.toFixed(2), shield: +me.shield.toFixed(2) });
+      gh: me.ghost > 0 ? 1 : 0, total: Math.round(me.total), spin: +me.spin.toFixed(2), boost: +me.boost.toFixed(2), shield: +me.shield.toFixed(2) });
   }
 
   // audio
@@ -597,8 +609,15 @@ function drawHud(now) {
   else if (g.lapBanner > 0) bigText(lap === g.laps ? 'FINAL LAP' : 'LAP ' + lap, '#fff', 0.6);
   else if (me.fin) bigText(pos + ordinal(pos) + '!', '#ffc53d', 0.8);
   else if (g.wrongWay > 1) bigText('WRONG WAY', '#ff5a4a', 0.55);
+  if (g.stuckT > 2.5 || g.wrongWay > 3) {
+    const msg = isTouch ? 'Stuck? Tap ↺ to reset' : 'Stuck? Press R to reset';
+    ctx.font = '800 17px Inter,sans-serif';
+    const tw = ctx.measureText(msg).width + 32;
+    ctx.fillStyle = 'rgba(15,13,22,.8)'; ctx.beginPath(); ctx.roundRect(W / 2 - tw / 2, H * 0.88 - 20, tw, 40, 20); ctx.fill();
+    ctx.fillStyle = "#ffc53d"; ctx.fillText(msg, W / 2, H * 0.88);
+  }
   if (me.spin > 0) { ctx.font = '800 18px Inter,sans-serif'; ctx.fillStyle = '#ff6b6b'; ctx.fillText('SPUN OUT!', W / 2, H * 0.62); }
-  if (left > 0 && left < 3.4) { ctx.font = '600 13px Inter,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.fillText(isTouch ? '' : 'Space = handbrake · E/Shift = item · C = camera', W / 2, H * 0.62); }
+  if (left > 0 && left < 3.4) { ctx.font = '600 13px Inter,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.fillText(isTouch ? '' : 'Space = handbrake · E/Shift = item · R = reset · C = camera', W / 2, H * 0.62); }
 }
 function bigText(t, color, scale) {
   ctx.save(); ctx.translate(W / 2, H * 0.3); ctx.scale(scale, scale);
@@ -619,6 +638,7 @@ function frame(now) {
   if (game) {
     update(dt, now);
     const me = game.me;
+    me.mesh.root.visible = !(me.ghost > 0 && Math.floor(now / 90) % 2);
     poseCar(me.mesh, { x: me.x, y: me.y, a: me.a, sp: me.sp, steer: me.steer, roll: game.roll, pitch: game.pitch,
       braking: me.braking || inp('hand'), boost: me.boost > 0, shield: me.shield > 0 }, dt);
     for (const c of game.cars.values()) {
