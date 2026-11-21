@@ -34,15 +34,20 @@
     engine: 640, vmax: 700,          // drive force, top speed
     boostV: 980, boostA: 950,
     brake: 1150, rev: 230,
-    gripF: 1300, gripR: 1250,        // peak lateral grip per axle
-    cF: 7000, cR: 7600,              // cornering stiffness
-    maxSteer: 0.62, steerRate: 5.5,  // rad, normalised units per second
+    gripF: 1400, gripR: 1700,        // peak lateral grip per axle (rear-biased = stable)
+    cF: 8000, cR: 11000,             // cornering stiffness
+    maxSteer: 0.6,                   // full-lock angle (rad) at standstill
+    steerIn: 3.8, steerOut: 8,       // steering ramp toward lock / back to centre (per s)
+    steerFade: 260,                  // speed at which available lock halves
+    tcUse: 0.4,                      // share of rear grip consumed by throttle
+    slideGrip: 0.88,                 // grip kept once a tyre is sliding
+    assist: 2.6,                     // stability assist strength (0 = off)
     roll: 45, aero: 0.00045,
     offGrip: 0.62, offV: 340, offRoll: 380,
-    hand: 0.48,                      // rear grip multiplier on handbrake
+    hand: 0.28,                      // rear grip multiplier on handbrake
     gears: [0, 160, 290, 410, 530, 640],
   };
-  const LAT_G = 1000;                // cornering accel bots plan around
+  const LAT_G = 1080;                // cornering accel bots plan around
 
   function cr(a, b, c, d, t) {
     const t2 = t * t, t3 = t2 * t;
@@ -176,7 +181,10 @@
     const boosting = c.boost > 0;
     if (boosting) thr = 1;
 
-    c.steer += clamp(steerT - c.steer, -PHYS.steerRate * h, PHYS.steerRate * h);
+    // steering wheel: slower turn-in, quicker self-centring
+    const toward = Math.abs(steerT) > Math.abs(c.steer) && Math.sign(steerT) === Math.sign(c.steer || steerT);
+    const rate = (toward ? PHYS.steerIn : PHYS.steerOut) * h;
+    c.steer += clamp(steerT - c.steer, -rate, rate);
 
     const fx = Math.cos(c.a), fy = Math.sin(c.a);
     let u = c.vx * fx + c.vy * fy;
@@ -220,17 +228,18 @@
     if (c.spin > 0) lon -= Math.sign(u) * 500;
 
     // tyre forces with friction circle on rear (driven) axle
-    const speedSteer = PHYS.maxSteer / (1 + Math.abs(u) / 380);
+    const speedSteer = PHYS.maxSteer / (1 + Math.abs(u) / PHYS.steerFade);
     const delta = c.steer * speedSteer;
     const gF = PHYS.gripF * gs;
     let gR = PHYS.gripR * gs * (hand ? PHYS.hand : 1);
-    const used = Math.min(Math.abs(drive) * 0.75, gR * 0.98);
+    const used = Math.min(Math.abs(drive) * PHYS.tcUse, gR * 0.98);
     const gRlat = Math.sqrt(Math.max(0, gR * gR - used * used));
     const uu = Math.max(Math.abs(u), 45), su = u < 0 ? -1 : 1;
     const af = Math.atan2(v + w * PHYS.A, uu) - delta * su;
     const ar = Math.atan2(v - w * PHYS.B, uu);
     // past the peak slip angle tyres slide and lose ~25% grip (lets drifts hold)
-    const slide = x => (Math.abs(x) > 0.2 ? 0.75 + 0.25 * Math.max(0, 1 - (Math.abs(x) - 0.2) * 5) : 1);
+    const sg = PHYS.slideGrip;
+    const slide = x => (Math.abs(x) > 0.2 ? sg + (1 - sg) * Math.max(0, 1 - (Math.abs(x) - 0.2) * 5) : 1);
     const Ff = clamp(-PHYS.cF * af, -gF * slide(af), gF * slide(af));
     const Fr = clamp(-PHYS.cR * ar, -gRlat * slide(ar), gRlat * slide(ar));
     c.slip = Math.abs(ar) * (Math.abs(u) > 80 ? 1 : Math.abs(u) / 80);
@@ -238,6 +247,18 @@
     u += (lon - Ff * Math.sin(delta) + w * v) * h;
     v += (Ff * Math.cos(delta) + Fr - w * u) * h;
     w += ((Ff * Math.cos(delta) * PHYS.A - Fr * PHYS.B) / PHYS.I) * h;
+
+    // stability assist: when the rear steps out (and you're not on the handbrake),
+    // bleed off yaw beyond what the steering asks for, like a mild ESC
+    if (PHYS.assist > 0 && !hand && c.spin <= 0 && u > 60) {
+      const wk = (u * Math.tan(delta)) / (PHYS.A + PHYS.B);
+      const excess = w - wk;
+      const k = clamp((Math.abs(ar) - 0.05) * 10, 0, 1);
+      if (k > 0 && Math.sign(excess) === Math.sign(w)) {
+        w -= excess * Math.min(1, PHYS.assist * k * h * 4);
+        v *= 1 - Math.min(0.5, PHYS.assist * k * h);
+      }
+    }
 
     // low speed and reversing: blend toward kinematic steering for stable handling
     const spd = Math.hypot(u, v);
@@ -329,7 +350,7 @@
     const tx = p.x + p.nx * ln, ty = p.y + p.ny * ln;
     const alpha = wrapAngle(Math.atan2(ty - c.y, tx - c.x) - c.a);
     const need = Math.atan((2 * (PHYS.A + PHYS.B) * Math.sin(alpha)) / ld);
-    const steerMax = PHYS.maxSteer / (1 + Math.abs(u) / 380);
+    const steerMax = PHYS.maxSteer / (1 + Math.abs(u) / PHYS.steerFade);
     let steer = clamp(need / steerMax, -1, 1);
     // countersteer when the rear steps out
     steer = clamp(steer - (c.lat || 0) * 0.004, -1, 1);
