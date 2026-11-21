@@ -5,6 +5,8 @@ power-up boxes (Turbo, Rocket, Oil Slick, Shield), 3 tracks, lobby chat, and tou
 
 - 3D chase camera (Three.js), hills, trees, grandstands, shadows and sky reflections
 - Tyre-model physics: grip limits, power oversteer, handbrake drifts, gears, walls and car-to-car impacts
+- Stunt jumps: kicker ramps send you flying; spin in the air for 360s and land straight to earn turbo
+- Shortcuts: narrow dirt cut-throughs behind "SHORTCUT" arches - shorter, but less grip and a jump of their own on some tracks
 - Skid marks, tyre smoke, sparks, explosions, body roll
 - Procedural audio: engine through the gears, tyre squeal, crashes, wind and crowd
 
@@ -21,7 +23,8 @@ The host picks track / laps / CPU count and starts the race.
 - **Railway / Fly.io**: same commands; the server reads `PORT` from the environment.
 
 ## Controls
-Arrows / WASD to drive, Space for handbrake, E or Shift to use an item, C to switch camera,
+Arrows / WASD to drive (left/right in the air to spin), Space for handbrake, E or Shift to use an item,
+R to reset onto the track, C to switch camera,
 Enter to chat, M to mute.
 
 ## Code layout

@@ -79,6 +79,7 @@ function startRace(room) {
       finished: false, ft: 0, item: null, itemAt: 0,
       lane: (Math.random() - 0.5) * track.width * 0.5, laneT: 0,
       skill: 0.86 + Math.random() * 0.1,
+      scChance: 0.3 + Math.random() * 0.5, // how often this CPU driver gambles on shortcuts
     });
     room.cars.set(e.id, car);
   });
@@ -160,7 +161,7 @@ function tickRoom(room) {
       S.botRecover(c, dt, track);
       const inp = S.botInput(track, c, c.lane, c.skill * band);
       S.stepCar(c, inp, dt, track, c.skill * band);
-      c.st = c.steer;
+      c.st = c.steer; c.stunt = null;
       if (!c.finished && c.total >= room.laps * track.len) finishCar(room, c);
 
       // pick up boxes
@@ -213,7 +214,7 @@ function tickRoom(room) {
     broadcast(room, {
       t: 'snap',
       cars: cars.map(c => ({
-        id: c.id, x: Math.round(c.x), y: Math.round(c.y), a: +c.a.toFixed(3), sp: Math.round(c.sp),
+        id: c.id, x: Math.round(c.x), y: Math.round(c.y), z: Math.round(c.z || 0), a: +c.a.toFixed(3), sp: Math.round(c.sp),
         total: Math.round(c.total), st: +(c.st || 0).toFixed(2),
         f: (c.spin > 0 ? 1 : 0) | (c.boost > 0 ? 2 : 0) | (c.shield > 0 ? 4 : 0) | (c.braking ? 8 : 0) | (c.ghost > 0 ? 16 : 0),
         fin: c.finished ? c.ft : 0,
@@ -286,7 +287,7 @@ wss.on('connection', ws => {
         car.x = num(m.x, car.x); car.y = num(m.y, car.y); car.a = num(m.a, car.a);
         car.sp = num(m.sp, car.sp); car.spin = num(m.spin, 0); car.boost = num(m.boost, 0); car.shield = num(m.shield, 0);
         car.vx = num(m.vx, Math.cos(car.a) * car.sp); car.vy = num(m.vy, Math.sin(car.a) * car.sp);
-        car.st = num(m.st, 0); car.braking = !!m.br; car.ghost = m.gh ? 1 : 0;
+        car.st = num(m.st, 0); car.braking = !!m.br; car.ghost = m.gh ? 1 : 0; car.z = num(m.z, 0);
         // progress can't jump more than a boosted car could plausibly travel
         const nt = num(m.total, car.total);
         if (Math.abs(nt - car.total) < 400) car.total = nt;

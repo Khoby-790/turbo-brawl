@@ -79,6 +79,27 @@ function textures() {
     g.fillStyle = '#fff'; g.font = '900 40px Bungee, Impact, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
     g.fillText('TURBO BRAWL', w / 2, h / 2 + 2);
   }, false);
+  TEX.dirt = canvasTex(256, 256, (g, w, h) => {
+    g.fillStyle = '#8a6a45'; g.fillRect(0, 0, w, h);
+    for (let i = 0; i < 7000; i++) { const v = r(); g.fillStyle = v < 0.5 ? 'rgba(60,40,20,.35)' : 'rgba(190,160,110,.3)'; g.fillRect(r() * w, r() * h, 2 + r() * 3, 2 + r() * 3); }
+    g.fillStyle = 'rgba(50,35,20,.35)'; g.fillRect(w * 0.25, 0, w * 0.1, h); g.fillRect(w * 0.65, 0, w * 0.1, h);
+  });
+  TEX.fence = canvasTex(128, 32, (g, w, h) => {
+    g.fillStyle = '#7a5532'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#5b3d22'; for (let x = 0; x < w; x += 32) g.fillRect(x, 0, 5, h);
+    g.fillStyle = 'rgba(0,0,0,.25)'; g.fillRect(0, 9, w, 3); g.fillRect(0, 22, w, 3);
+  });
+  TEX.ramp = canvasTex(128, 128, (g, w, h) => {
+    g.fillStyle = '#ffc61a'; g.fillRect(0, 0, w, h);
+    g.fillStyle = '#1b1b1b';
+    for (let y = -h; y < h * 2; y += 40) { g.beginPath(); g.moveTo(0, y); g.lineTo(w / 2, y - 26); g.lineTo(w, y); g.lineTo(w, y + 14); g.lineTo(w / 2, y - 12); g.lineTo(0, y + 14); g.fill(); }
+  }, false);
+  TEX.shortcut = canvasTex(512, 96, (g, w, h) => {
+    g.fillStyle = '#2f8f3a'; g.fillRect(0, 0, w, h);
+    g.strokeStyle = '#fff'; g.lineWidth = 6; g.strokeRect(6, 6, w - 12, h - 12);
+    g.fillStyle = '#fff'; g.font = '900 52px Bungee, Impact, sans-serif'; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('SHORTCUT', w / 2, h / 2 + 3);
+  }, false);
   TEX.puff = canvasTex(64, 64, (g, w, h) => {
     const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
     gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.5, 'rgba(255,255,255,.5)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
@@ -92,7 +113,6 @@ export function buildWorld(trackIdx, renderer) {
   const track = S.buildTrack(trackIdx), T = THEMES[track.theme], tex = textures();
   const scene = new THREE.Scene();
   const half = track.width / 2;
-  const edgeOf = (k) => Math.max(track.pts[k].wp, track.pts[k].wn);
 
   scene.fog = new THREE.Fog(T.fog, 1400, 5200);
   // sky dome
@@ -131,15 +151,14 @@ export function buildWorld(trackIdx, renderer) {
   scene.add(sun, sun.target);
   const sunOff = new THREE.Vector3(-500, 900, -350);
 
-  // terrain height
+  // terrain height: flat near any road (main loop or shortcut), hills further out
   const heightAt = (x, z) => {
-    const n = S.nearest(track, x, z), p = track.pts[n.i];
-    const edge = edgeOf(n.i);
-    const m = smooth(edge + 40, edge + 520, n.d);
+    const cl = S.clearance(track, x, z);
+    const m = smooth(40, 520, cl);
     let h = -1.2 + (fbm(x, z) - 0.32) * T.amp * m;
     if (track.theme === 'canyon') h += Math.max(0, vnoise(x / 600, z / 600) - 0.55) * 900 * m; // mesas
-    if (T.sea) h -= Math.max(0, n.d - 1000) * 0.14;
-    return { h: n.d < edge + 40 ? -1.2 : h, d: n.d, edge, p };
+    if (T.sea) h -= Math.max(0, cl - 780) * 0.14;
+    return { h: cl < 40 ? -1.2 : h, cl };
   };
 
   // terrain mesh
@@ -153,7 +172,7 @@ export function buildWorld(trackIdx, renderer) {
       pos.push(x, H.h, z);
       const c = ground.clone().multiplyScalar(0.85 + fbm(x * 3, z * 3) * 0.3);
       c.lerp(rock, smooth(40, 260, H.h));
-      if (H.d < H.edge + 60) c.lerp(verge, 0.6);
+      if (H.cl < 60) c.lerp(verge, 0.6);
       if (T.sea && H.h < 4) c.lerp(sand, smooth(4, -6, H.h));
       col.push(c.r, c.g, c.b);
     }
@@ -179,51 +198,126 @@ export function buildWorld(trackIdx, renderer) {
     }
   }
 
-  // ribbon helper along the track: offsets a(k), b(k) across, at heights ya, yb
-  function ribbon(fa, fb, ya, yb, vScale, mat, uA = 0, uB = 1) {
-    const pos = [], uv = [], idx = [], N = track.N;
-    for (let k = 0; k <= N; k++) {
-      const p = track.pts[k % N], s = k === N ? track.len : p.s;
+  // ---- roads ----
+  const others = R => track.roads.filter(Q => Q !== R);
+  const pastEnd = (Q, i, x, y) => {
+    if (Q.closed) return false;
+    const p = Q.pts[i], along = (x - p.x) * p.dx + (y - p.y) * p.dy;
+    return (i === 0 && along < 0) || (i === Q.N - 1 && along > 0);
+  };
+  // lateral offset of (x,y) on road Q, or null if beyond its ends
+  const latOn = (Q, x, y) => {
+    const n = S.nearestOn(Q, x, y);
+    if (pastEnd(Q, n.i, x, y)) return null;
+    const p = Q.pts[n.i];
+    return { lat: (x - p.x) * p.nx + (y - p.y) * p.ny, p };
+  };
+  const onOtherSurface = (R, x, y, pad = 4) => others(R).some(Q => { const l = latOn(Q, x, y); return l && Math.abs(l.lat) < Q.half + pad; });
+  const inOtherEnvelope = (R, x, y) => others(R).some(Q => { const l = latOn(Q, x, y); return l && l.lat < l.p.wp - 3 && l.lat > -(l.p.wn - 3); });
+
+  // ribbon along road R between lateral offsets fa(k)..fb(k); keep(k) can drop quads
+  function ribbon(R, fa, fb, ya, yb, vScale, mat, keep) {
+    const pos = [], uv = [], idx = [], N = R.N, M = R.closed ? N : N - 1;
+    for (let k = 0; k <= M; k++) {
+      const p = R.pts[k % N], s = R.closed ? (k === N ? track.len : p.s) : k * track.step;
       const oa = fa(k % N), ob = fb(k % N);
       pos.push(p.x + p.nx * oa, ya, p.y + p.ny * oa, p.x + p.nx * ob, yb, p.y + p.ny * ob);
-      uv.push(uA, s / vScale, uB, s / vScale);
-      if (k < N) { const i = k * 2; idx.push(i, i + 1, i + 2, i + 1, i + 3, i + 2); }
+      uv.push(0, s / vScale, 1, s / vScale);
+      if (k < M && (!keep || keep(k))) { const i = k * 2; idx.push(i, i + 1, i + 2, i + 1, i + 3, i + 2); }
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     g.setIndex(idx); g.computeVertexNormals();
     const m = new THREE.Mesh(g, mat);
+    m.receiveShadow = true;
+    if (g.attributes.normal.count && g.attributes.normal.getY(0) < 0) mat.side = THREE.DoubleSide;
+    scene.add(m);
     return m;
   }
-  const roadMat = new THREE.MeshStandardMaterial({ map: tex.road, roughness: 0.85 });
-  const road = ribbon(() => -half, () => half, 0, 0, 170, roadMat);
-  road.receiveShadow = true; scene.add(road);
-  // fix normals pointing down if winding is reversed
-  if (road.geometry.attributes.normal.getY(0) < 0) { roadMat.side = THREE.DoubleSide; }
-  const curbMat = new THREE.MeshStandardMaterial({ map: tex.curb, roughness: 0.7, side: THREE.DoubleSide });
-  for (const sgn of [1, -1]) {
-    const c = ribbon(() => sgn * half, () => sgn * (half + 16), 0.5, 0.3, 64, curbMat);
-    c.receiveShadow = true; scene.add(c);
-    const vg = ribbon(() => sgn * (half + 16), k => sgn * (sgn > 0 ? track.pts[k].wp : track.pts[k].wn), 0.15, 0.15, 200,
-      new THREE.MeshStandardMaterial({ color: new THREE.Color(...T.verge).multiplyScalar(0.9), roughness: 1, side: THREE.DoubleSide }));
-    vg.receiveShadow = true; scene.add(vg);
-    // wall
-    const wallMat = new THREE.MeshStandardMaterial({ map: tex.wall, roughness: 0.6, side: THREE.DoubleSide });
-    const pos = [], uv = [], idx = [], N = track.N;
-    for (let k = 0; k <= N; k++) {
-      const p = track.pts[k % N], off = sgn * (sgn > 0 ? p.wp : p.wn), s = k === N ? track.len : p.s;
-      const x = p.x + p.nx * off, z = p.y + p.ny * off;
-      pos.push(x, 0, z, x, 18, z);
-      uv.push(s / 90, 0, s / 90, 1);
-      if (k < N) { const i = k * 2; idx.push(i, i + 2, i + 1, i + 1, i + 2, i + 3); }
+  // vertical barrier along road R at each side's wall offset; hidden where it would block another road
+  function barrier(R, sgn, height, mat, vScale) {
+    const pos = [], uv = [], idx = [], N = R.N, M = R.closed ? N : N - 1;
+    const at = k => { const p = R.pts[k % N], off = sgn * (sgn > 0 ? p.wp : p.wn); return [p.x + p.nx * off, p.y + p.ny * off]; };
+    const open = [];
+    for (let k = 0; k <= M; k++) open.push(inOtherEnvelope(R, ...at(k)));
+    for (let k = 0; k <= M; k++) {
+      const [x, z] = at(k), s = R.closed ? (k === N ? track.len : R.pts[k % N].s) : k * track.step;
+      pos.push(x, 0, z, x, height, z);
+      uv.push(s / vScale, 0, s / vScale, 1);
+      if (k < M && !open[k] && !open[k + 1]) { const i = k * 2; idx.push(i, i + 2, i + 1, i + 1, i + 2, i + 3); }
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
     g.setIndex(idx); g.computeVertexNormals();
-    const wall = new THREE.Mesh(g, wallMat); wall.castShadow = true; wall.receiveShadow = true;
+    const wall = new THREE.Mesh(g, mat); wall.castShadow = true; wall.receiveShadow = true;
     scene.add(wall);
+  }
+
+  const main = track.roads[0];
+  ribbon(main, () => -half, () => half, 0, 0, 170, new THREE.MeshStandardMaterial({ map: tex.road, roughness: 0.85 }));
+  const curbMat = new THREE.MeshStandardMaterial({ map: tex.curb, roughness: 0.7, side: THREE.DoubleSide });
+  const vergeMat = new THREE.MeshStandardMaterial({ color: new THREE.Color(...T.verge).multiplyScalar(0.9), roughness: 1, side: THREE.DoubleSide });
+  const wallMat = new THREE.MeshStandardMaterial({ map: tex.wall, roughness: 0.6, side: THREE.DoubleSide });
+  for (const sgn of [1, -1]) {
+    const curbAt = k => { const p = main.pts[k]; return [p.x + p.nx * sgn * (half + 8), p.y + p.ny * sgn * (half + 8)]; };
+    ribbon(main, () => sgn * half, () => sgn * (half + 16), 0.5, 0.3, 64, curbMat,
+      k => !onOtherSurface(main, ...curbAt(k)) && !onOtherSurface(main, ...curbAt((k + 1) % main.N)));
+    ribbon(main, () => sgn * (half + 16), k => sgn * (sgn > 0 ? main.pts[k].wp : main.pts[k].wn), 0.15, 0.15, 200, vergeMat);
+    barrier(main, sgn, 18, wallMat, 90);
+  }
+  // shortcuts: dirt roads with wooden fences, drawn only where they leave the main road
+  const dirtMat = new THREE.MeshStandardMaterial({ map: tex.dirt, roughness: 1 });
+  const fenceMat = new THREE.MeshStandardMaterial({ map: tex.fence, roughness: 0.9, side: THREE.DoubleSide });
+  for (const R of track.roads.slice(1)) {
+    ribbon(R, () => -R.half, () => R.half, 0.2, 0.2, 140, dirtMat, k => !onOtherSurface(R, R.pts[k].x, R.pts[k].y, -6));
+    for (const sgn of [1, -1]) barrier(R, sgn, 12, fenceMat, 60);
+    // "SHORTCUT" arch where the branch leaves the main road
+    let k = 0;
+    while (k < R.N - 1 && onOtherSurface(R, R.pts[k].x, R.pts[k].y, R.half + 40)) k++;
+    const p = R.pts[Math.min(R.N - 1, k + 2)], g = new THREE.Group();
+    const post = new THREE.MeshStandardMaterial({ color: 0x6b4a2f, roughness: 0.9 });
+    for (const s2 of [-1, 1]) {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(6, 62, 6), post);
+      m.position.set(0, 31, s2 * (R.half + 18)); m.castShadow = true; g.add(m);
+    }
+    const sign = new THREE.Mesh(new THREE.BoxGeometry(4, 18, R.width + 40),
+      [new THREE.MeshStandardMaterial({ map: tex.shortcut }), new THREE.MeshStandardMaterial({ map: tex.shortcut }), post, post, post, post]);
+    sign.position.y = 62; sign.castShadow = true; g.add(sign);
+    g.position.set(p.x, 0, p.y); g.rotation.y = -p.ang;
+    scene.add(g);
+  }
+
+  // jump ramps
+  {
+    const topMat = new THREE.MeshStandardMaterial({ map: tex.ramp, roughness: 0.6 });
+    const sideMat = new THREE.MeshStandardMaterial({ color: 0x3a3a40, roughness: 0.8 });
+    for (const r of track.ramps) {
+      const L = r.len, Wd = r.w / 2, Hh = r.h;
+      // local frame: x along the ramp, z across, y up
+      const v = [
+        [0, 0.3, -Wd], [0, 0.3, Wd], [L, Hh, -Wd], [L, Hh, Wd], [L, 0, -Wd], [L, 0, Wd],
+      ];
+      const tri = (a, b, c, uva, uvb, uvc, arr, uvs) => { arr.push(...v[a], ...v[b], ...v[c]); uvs.push(...uva, ...uvb, ...uvc); };
+      const top = [], topUv = [], side = [], sideUv = [];
+      tri(0, 2, 1, [0, 0], [0, 1], [1, 0], top, topUv); tri(1, 2, 3, [1, 0], [0, 1], [1, 1], top, topUv);
+      tri(2, 4, 3, [0, 0], [0, 0], [0, 0], side, sideUv); tri(3, 4, 5, [0, 0], [0, 0], [0, 0], side, sideUv);
+      tri(0, 4, 2, [0, 0], [0, 0], [0, 0], side, sideUv); tri(1, 3, 5, [0, 0], [0, 0], [0, 0], side, sideUv);
+      const mk = (arr, uvs, mat) => {
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3));
+        g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+        g.computeVertexNormals();
+        mat.side = THREE.DoubleSide;
+        const m = new THREE.Mesh(g, mat); m.castShadow = true; m.receiveShadow = true;
+        return m;
+      };
+      const grp = new THREE.Group();
+      grp.add(mk(top, topUv, topMat), mk(side, sideUv, sideMat));
+      grp.position.set(r.x, 0, r.y); grp.rotation.y = -r.ang;
+      scene.add(grp);
+    }
   }
 
   // start line + gantry
@@ -258,6 +352,7 @@ export function buildWorld(trackIdx, renderer) {
       for (const sgn of [1, -1]) {
         const off = sgn * ((sgn > 0 ? p.wp : p.wn) + 55);
         const x = p.x + p.nx * off, z = p.y + p.ny * off;
+        if (S.clearance(track, x, z) < -60 || track.roads.slice(1).some(R => S.nearestOn(R, x, z).d < R.half + 200)) continue;
         const n = S.nearest(track, x, z);
         if (n.d < Math.abs(off) - 5) continue;
         const g = new THREE.Group();
@@ -282,7 +377,7 @@ export function buildWorld(trackIdx, renderer) {
     for (let tries = 0; tries < 6000 && spots.length < want; tries++) {
       const x = b.minX - pad + r() * (b.maxX - b.minX + pad * 2), z = b.minY - pad + r() * (b.maxY - b.minY + pad * 2);
       const H = heightAt(x, z);
-      if (H.d < H.edge + 50) continue;
+      if (H.cl < 50) continue;
       if (T.sea && H.h < 2) continue;
       if (stands.some(s => Math.hypot(s.x - x, s.y - z) < 180)) continue;
       spots.push({ x, z, h: H.h, s: 0.7 + r() * 0.8, rot: r() * 6.28, rock: r() < 0.18 });
@@ -381,7 +476,7 @@ export function makeCarMesh(color, name) {
 
 export function poseCar(m, s, dt) {
   // s: {x, y, a, sp, steer, roll, pitch, braking, boost, shield}
-  m.root.position.set(s.x, 0, s.y);
+  m.root.position.set(s.x, s.z || 0, s.y);
   m.root.rotation.y = -s.a;
   m.body.rotation.x = s.roll || 0;
   m.body.rotation.z = s.pitch || 0;

@@ -210,7 +210,10 @@ function getMini(idx) {
   const p = new Path2D();
   track.pts.forEach((q, i) => (i ? p.lineTo : p.moveTo).call(p, (q.x - b.minX) * sc, (q.y - b.minY) * sc));
   p.closePath();
-  return mini[idx] = { path: p, sc, w: (b.maxX - b.minX) * sc, h: (b.maxY - b.minY) * sc };
+  const sc2 = new Path2D();
+  for (const R of track.roads.slice(1)) R.pts.forEach((q, i) => (i ? sc2.lineTo : sc2.moveTo).call(sc2, (q.x - b.minX) * sc, (q.y - b.minY) * sc));
+  const ramps = track.ramps.map(r => [(r.x - b.minX) * sc, (r.y - b.minY) * sc]);
+  return mini[idx] = { path: p, shortcuts: sc2, ramps, sc, w: (b.maxX - b.minX) * sc, h: (b.maxY - b.minY) * sc };
 }
 
 // ---------------- game lifecycle ----------------
@@ -227,7 +230,7 @@ function startGame(m) {
       scene.add(me.mesh.root);
     } else {
       const rc = { id: c.id, name: c.name, color: c.color, bot: c.bot, x: c.x, y: c.y, a: c.a, tx: c.x, ty: c.y, ta: c.a,
-        sp: 0, total: 0, f: 0, fin: 0, st: 0, vx: 0, vy: 0, px: c.x, py: c.y, roll: 0, mesh: makeCarMesh(c.color, c.name), skid: null, smoke: 0 };
+        sp: 0, total: 0, f: 0, fin: 0, st: 0, vx: 0, vy: 0, z: 0, tz: 0, road: 0, mi: undefined, ni: 0, px: c.x, py: c.y, roll: 0, mesh: makeCarMesh(c.color, c.name), skid: null, smoke: 0 };
       scene.add(rc.mesh.root);
       cars.set(c.id, rc);
     }
@@ -267,7 +270,7 @@ function onSnap(m) {
     if (s.id === myId) { if (s.fin) game.me.fin = s.fin; continue; }
     const c = game.cars.get(s.id);
     if (!c) continue;
-    c.tx = s.x; c.ty = s.y; c.ta = s.a; c.sp = s.sp; c.total = s.total; c.f = s.f; c.fin = s.fin; c.stT = s.st || 0; c.ghost = s.f & 16 ? 1 : 0;
+    c.tx = s.x; c.ty = s.y; c.ta = s.a; c.sp = s.sp; c.total = s.total; c.f = s.f; c.fin = s.fin; c.stT = s.st || 0; c.ghost = s.f & 16 ? 1 : 0; c.tz = s.z || 0;
   }
 }
 
@@ -342,18 +345,42 @@ function update(dt, now) {
 
   let input = {};
   if (racing && !finished) input = { up: inp('up'), down: inp('down'), left: inp('left'), right: inp('right'), hand: inp('hand') };
-  else if (racing && finished) { S.botRecover(me, dt); input = S.botInput(track, me, 0, 0.85); }
+  else if (racing && finished) { S.botRecover(me, dt, track); input = S.botInput(track, me, 0, 0.85); }
   else input = { hand: true }; // hold on the grid
   me.crash = 0;
   S.stepCar(me, input, dt, track);
 
   // wall impact feedback
   if (me.crash > 60) {
-    const p = track.pts[me.ni], off = (me.x - p.x) * p.nx + (me.y - p.y) * p.ny, side = off > 0 ? 1 : -1;
-    sparks(me.x + p.nx * side * 13, me.y + p.ny * side * 13, Math.min(20, me.crash / 25 | 0), -p.nx * side, -p.ny * side);
+    const wn = me.wallN || { nx: 0, ny: 0 };
+    sparks(me.x + wn.nx * 13, me.y + wn.ny * 13, Math.min(20, me.crash / 25 | 0), -wn.nx, -wn.ny);
     if (me.crash > 120) { Snd.crash(me.crash); g.shake = Math.max(g.shake, Math.min(0.6, me.crash / 900)); g.dmg += me.crash / 1500; }
     else if (Math.random() < 0.3) Snd.burst(0.1, 2500, 'bandpass', 0.05, 2);
   }
+
+  // landings and stunts
+  if (me.landImpact) {
+    const imp = me.landImpact; me.landImpact = 0;
+    if (imp > 80) {
+      for (let i = 0; i < 16; i++) {
+        const a = Math.random() * 6.283;
+        g.parts.emit(me.x + Math.cos(a) * 14, 3, me.y + Math.sin(a) * 14, { vx: Math.cos(a) * 90, vz: Math.sin(a) * 90, vy: 15, life: 0.9,
+          size: 10, grow: 30, color: me.surf === 'dirt' ? 0x9a7a52 : 0xcfcfcf, alpha: 0.5, drag: 2 });
+      }
+      Snd.crash(Math.min(320, imp * 0.9)); g.shake = Math.max(g.shake, Math.min(0.45, imp / 700));
+    }
+  }
+  if (me.stunt) {
+    const st = me.stunt; me.stunt = null;
+    if (st.kind === 'clean') {
+      const txt = st.spins >= 2 ? (360 * st.spins) + '!!' : st.spins === 1 ? '360!' : st.air > 0.7 ? 'BIG AIR!' : 'NICE JUMP';
+      g.popup = { text: txt, sub: '+TURBO', color: '#ffc53d', t: 1.6 };
+      Snd.tone(784, 0.1, 'triangle', 0.08); Snd.tone(1175, 0.18, 'triangle', 0.07);
+      if (st.spins) Snd.tone(1568, 0.25, 'triangle', 0.06);
+    } else if (st.kind === 'rough') g.popup = { text: 'ROUGH LANDING', sub: '', color: '#ffffff', t: 1.2 };
+    else { g.popup = { text: 'CRASH LANDING!', sub: '', color: '#ff5a4a', t: 1.4 }; Snd.crash(400); }
+  }
+  if (g.popup) { g.popup.t -= dt; if (g.popup.t <= 0) g.popup = null; }
 
   // lap banner / finish
   const lap = Math.max(1, Math.floor(me.total / track.len) + 1);
@@ -377,7 +404,7 @@ function update(dt, now) {
   g.stuckT = g.stuckSince ? (now - g.stuckSince) / 1000 : 0;
 
   // wrong way detection
-  const tp = track.pts[me.ni];
+  const tp = S.roadPoint(track, me);
   const along = Math.cos(me.a) * tp.dx + Math.sin(me.a) * tp.dy;
   g.wrongWay = racing && along < -0.4 && me.sp > 80 ? g.wrongWay + dt : 0;
 
@@ -395,8 +422,11 @@ function update(dt, now) {
     const spd = Math.hypot(c.vx, c.vy);
     const latv = -c.vx * Math.sin(c.a) + c.vy * Math.cos(c.a);
     c.roll += (Math.max(-0.08, Math.min(0.08, -latv * 0.0004 - c.st * spd * 0.00006)) - c.roll) * Math.min(1, dt * 6);
-    const remoteOff = (() => { const n = S.nearest(track, c.x, c.y, c.ni); c.ni = n.i; return n.d > track.width / 2; })();
-    trackSkid(c, c, (Math.abs(latv) > 70 && spd > 120) || (c.f & 1), remoteOff);
+    S.locate(track, c);
+    const env = S.envelope(track, c), remoteDirt = !env.onRoad || env.kind === 'dirt';
+    c.z += ((c.tz || 0) - c.z) * Math.min(1, dt * 14);
+    trackSkid(c, c, c.z < 1 && ((Math.abs(latv) > 70 && spd > 120) || (c.f & 1)), remoteDirt);
+    if (remoteDirt && c.z < 1 && spd > 150 && Math.random() < 0.4) g.parts.emit(c.x - Math.cos(c.a) * 20, 3, c.y - Math.sin(c.a) * 20, { vy: 18, life: 0.9, size: 9, grow: 30, color: 0x9a7a52, alpha: 0.45, drag: 1.5 });
     if (c.f & 1) c.smoke = 2.5;
     c.smoke = Math.max(0, c.smoke - dt);
     if (c.smoke > 0 && Math.random() < 0.4) g.parts.emit(c.x, 14, c.y, { vy: 25, vx: (Math.random() - .5) * 20, vz: (Math.random() - .5) * 20, life: 1.4, size: 10, grow: 28, color: 0x2a2a2a, alpha: 0.5, drag: 0.8 });
@@ -450,8 +480,8 @@ function update(dt, now) {
 
   // my car effects
   const spd = Math.hypot(me.vx, me.vy);
-  trackSkid(g, me, (me.slip > 0.13 && spd > 90) || me.spin > 0 || (input.hand && spd > 60), me.off);
-  if (me.off && spd > 120 && Math.random() < 0.6) {
+  trackSkid(g, me, !me.inAir && ((me.slip > 0.13 && spd > 90) || me.spin > 0 || (input.hand && spd > 60)), me.off || me.surf === 'dirt');
+  if ((me.off || me.surf === 'dirt') && !me.inAir && spd > 120 && Math.random() < 0.6) {
     const w = rearWheels(me)[Math.random() < 0.5 ? 0 : 1];
     g.parts.emit(w[0], 3, w[1], { vx: -me.vx * 0.15, vz: -me.vy * 0.15, vy: 20, life: 0.9, size: 9, grow: 30, color: 0x9a7a52, alpha: 0.5, drag: 1.5 });
   }
@@ -468,7 +498,9 @@ function update(dt, now) {
   g.prevU = u;
   const latA = me.w * u;
   g.roll += (Math.max(-0.1, Math.min(0.1, -latA * 0.00007)) - g.roll) * Math.min(1, dt * 7);
-  g.pitch += (Math.max(-0.06, Math.min(0.06, -longA * 0.00005)) - g.pitch) * Math.min(1, dt * 7);
+  const pitchT = me.inAir ? Math.max(-0.35, Math.min(0.3, me.vz / 700))
+    : me.onRamp ? Math.atan2(me.onRamp.h, me.onRamp.len) : Math.max(-0.06, Math.min(0.06, -longA * 0.00005));
+  g.pitch += (pitchT - g.pitch) * Math.min(1, dt * (me.onRamp ? 20 : 7));
 
   g.parts.update(dt);
   g.itemFlash = Math.max(0, g.itemFlash - dt);
@@ -477,7 +509,7 @@ function update(dt, now) {
   if (now - g.lastSend > 50) {
     g.lastSend = now;
     send({ t: 'state', x: +me.x.toFixed(1), y: +me.y.toFixed(1), a: +me.a.toFixed(3), sp: Math.round(me.sp),
-      vx: Math.round(me.vx), vy: Math.round(me.vy), st: +me.steer.toFixed(2), br: me.braking ? 1 : 0,
+      vx: Math.round(me.vx), vy: Math.round(me.vy), z: Math.round(me.z), st: +me.steer.toFixed(2), br: me.braking ? 1 : 0,
       gh: me.ghost > 0 ? 1 : 0, total: Math.round(me.total), spin: +me.spin.toFixed(2), boost: +me.boost.toFixed(2), shield: +me.shield.toFixed(2) });
   }
 
@@ -499,17 +531,18 @@ function emitFlame(c) {
 function updateCamera(dt) {
   const g = game, me = g.me;
   const spd = Math.hypot(me.vx, me.vy);
-  // camera heading follows car heading, but lags during spins
-  const target = me.spin > 0 ? g.camYaw : me.a;
+  // during spins and air tricks the camera follows where the car is going, not where it points
+  const target = me.spin > 0 || me.inAir ? (spd > 80 ? Math.atan2(me.vy, me.vx) : g.camYaw) : me.a;
   g.camYaw += S.wrapAngle(target - g.camYaw) * Math.min(1, dt * (camMode === 2 ? 14 : 5));
   const cx = Math.cos(g.camYaw), cy = Math.sin(g.camYaw);
   const [dist, height, look] = camMode === 0 ? [92, 36, 60] : camMode === 1 ? [150, 62, 70] : [-6, 17, 120];
-  const want = new THREE.Vector3(me.x - cx * dist, height, me.y - cy * dist);
+  g.camZ = (g.camZ || 0) + ((me.z || 0) - (g.camZ || 0)) * Math.min(1, dt * 6); // ease up/down with jumps
+  const want = new THREE.Vector3(me.x - cx * dist, height + g.camZ * (camMode === 2 ? 1 : 0.75), me.y - cy * dist);
   if (!g.camPos || camMode === 2) g.camPos = want.clone();
   else g.camPos.lerp(want, Math.min(1, dt * 9));
   camera.position.copy(g.camPos);
   if (g.shake > 0) camera.position.add(new THREE.Vector3((Math.random() - .5) * 10 * g.shake, (Math.random() - .5) * 6 * g.shake, (Math.random() - .5) * 10 * g.shake));
-  camera.lookAt(me.x + cx * look, camMode === 2 ? 14 : 12, me.y + cy * look);
+  camera.lookAt(me.x + cx * look, (camMode === 2 ? 14 : 12) + g.camZ * 0.6, me.y + cy * look);
   const fov = 62 + Math.min(1, spd / 700) * 12 + (me.boost > 0 ? 8 : 0);
   g.fov += (fov - g.fov) * Math.min(1, dt * 3);
   camera.fov = g.fov; camera.updateProjectionMatrix();
@@ -582,7 +615,7 @@ function drawHud(now) {
   ctx.fillText(kmh, sx + 12, sy + 36);
   ctx.fillStyle = '#a8a3b5'; ctx.font = '600 11px Inter,sans-serif'; ctx.fillText('KM/H', sx + 76, sy + 34);
   ctx.textAlign = 'right'; ctx.fillStyle = '#ffc53d'; ctx.font = '400 26px Bungee,Impact,sans-serif';
-  ctx.fillText(me.sp < -10 ? 'R' : me.gear, sx + 140, sy + 36);
+  ctx.fillText(me.sp < -10 && !me.inAir ? 'R' : me.gear, sx + 140, sy + 36);
   const rpmT = Math.min(1, (me.rpm - 900) / 6600);
   for (let i = 0; i < 14; i++) {
     const on = i / 14 < rpmT;
@@ -595,6 +628,8 @@ function drawHud(now) {
   panel(mx - 12, my - 12, M.w + 24, M.h + 24);
   ctx.save(); ctx.translate(mx, my);
   ctx.lineJoin = 'round'; ctx.strokeStyle = 'rgba(255,255,255,.55)'; ctx.lineWidth = 4; ctx.stroke(M.path);
+  ctx.setLineDash([4, 4]); ctx.strokeStyle = 'rgba(214,170,110,.9)'; ctx.lineWidth = 3; ctx.stroke(M.shortcuts); ctx.setLineDash([]);
+  ctx.fillStyle = '#ffc61a'; for (const [rx, ry] of M.ramps) { ctx.beginPath(); ctx.moveTo(rx, ry - 4); ctx.lineTo(rx + 4, ry + 3); ctx.lineTo(rx - 4, ry + 3); ctx.fill(); }
   const b = track.bounds, sc = M.sc;
   for (const c of g.cars.values()) { ctx.fillStyle = c.color; ctx.beginPath(); ctx.arc((c.x - b.minX) * sc, (c.y - b.minY) * sc, 4, 0, 6.283); ctx.fill(); }
   ctx.fillStyle = me.color; ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
@@ -616,6 +651,15 @@ function drawHud(now) {
     ctx.fillStyle = 'rgba(15,13,22,.8)'; ctx.beginPath(); ctx.roundRect(W / 2 - tw / 2, H * 0.88 - 20, tw, 40, 20); ctx.fill();
     ctx.fillStyle = "#ffc53d"; ctx.fillText(msg, W / 2, H * 0.88);
   }
+  if (g.popup) {
+    const a = Math.min(1, g.popup.t * 2), sc = 1 + Math.max(0, g.popup.t - 1.2) * 0.8;
+    ctx.save(); ctx.globalAlpha = a; ctx.translate(W / 2, H * 0.22); ctx.scale(sc, sc);
+    ctx.font = `400 ${Math.min(56, W / 10)}px Bungee,Impact,sans-serif`; ctx.lineWidth = 7; ctx.strokeStyle = 'rgba(0,0,0,.6)';
+    ctx.strokeText(g.popup.text, 0, 0); ctx.fillStyle = g.popup.color; ctx.fillText(g.popup.text, 0, 0);
+    if (g.popup.sub) { ctx.font = '800 18px Inter,sans-serif'; ctx.fillStyle = '#5ee07a'; ctx.fillText(g.popup.sub, 0, 40); }
+    ctx.restore();
+  }
+  if (me.inAir && me.airT > 0.15 && !g.popup && !isTouch) { ctx.font = '700 14px Inter,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.8)'; ctx.fillText('← → to spin · land straight!', W / 2, H * 0.22); }
   if (me.spin > 0) { ctx.font = '800 18px Inter,sans-serif'; ctx.fillStyle = '#ff6b6b'; ctx.fillText('SPUN OUT!', W / 2, H * 0.62); }
   if (left > 0 && left < 3.4) { ctx.font = '600 13px Inter,sans-serif'; ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.fillText(isTouch ? '' : 'Space = handbrake · E/Shift = item · R = reset · C = camera', W / 2, H * 0.62); }
 }
@@ -639,10 +683,10 @@ function frame(now) {
     update(dt, now);
     const me = game.me;
     me.mesh.root.visible = !(me.ghost > 0 && Math.floor(now / 90) % 2);
-    poseCar(me.mesh, { x: me.x, y: me.y, a: me.a, sp: me.sp, steer: me.steer, roll: game.roll, pitch: game.pitch,
+    poseCar(me.mesh, { x: me.x, y: me.y, z: me.z, a: me.a, sp: me.sp, steer: me.steer, roll: game.roll, pitch: game.pitch,
       braking: me.braking || inp('hand'), boost: me.boost > 0, shield: me.shield > 0 }, dt);
     for (const c of game.cars.values()) {
-      poseCar(c.mesh, { x: c.x, y: c.y, a: c.a, sp: c.sp, steer: c.st, roll: c.roll, pitch: 0, braking: c.f & 8, boost: c.f & 2, shield: c.f & 4 }, dt);
+      poseCar(c.mesh, { x: c.x, y: c.y, z: c.z, a: c.a, sp: c.sp, steer: c.st, roll: c.roll, pitch: Math.max(-0.3, Math.min(0.3, ((c.tz || 0) - c.z) * 0.05)), braking: c.f & 8, boost: c.f & 2, shield: c.f & 4 }, dt);
     }
     updateCamera(dt);
     renderer.render(game.scene, camera);
@@ -654,3 +698,6 @@ function frame(now) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
+
+// test hook (only with ?debug in the URL): lets automated tests position the car
+if (new URLSearchParams(location.search).has('debug')) window.__tb = { get game() { return game; }, S };
