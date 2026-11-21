@@ -6,6 +6,7 @@ const S = require('./public/shared.js');
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC = path.join(__dirname, 'public');
+const THREE_PATH = path.join(__dirname, 'node_modules', 'three', 'build', 'three.module.min.js');
 const MAX_CARS = 8;
 const COLORS = ['#e6372e', '#2f7de1', '#f2c12e', '#35b04a', '#a24de0', '#ff8a1f', '#1fc8c8', '#ff4fa3'];
 const BOT_NAMES = ['Blaze', 'Nitro', 'Dusty', 'Vroom', 'Sparky', 'Crusher', 'Zippy', 'Torque'];
@@ -15,6 +16,13 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
 const server = http.createServer((req, res) => {
   let url = decodeURIComponent(req.url.split('?')[0]);
   if (url === '/') url = '/index.html';
+  if (url === '/vendor/three.module.js') {
+    return fs.readFile(THREE_PATH, (err, data) => {
+      if (err) { res.writeHead(500); return res.end(); }
+      res.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'public, max-age=86400' });
+      res.end(data);
+    });
+  }
   const file = path.normalize(path.join(PUBLIC, url));
   if (!file.startsWith(PUBLIC)) { res.writeHead(403); return res.end(); }
   fs.readFile(file, (err, data) => {
@@ -149,8 +157,10 @@ function tickRoom(room) {
       if (c.laneT <= 0) { c.lane = (Math.random() - 0.5) * track.width * 0.55; c.laneT = 2 + Math.random() * 3; }
       const gap = c.total - humanBest;
       const band = gap > 1200 ? 0.88 : gap < -1500 ? 1.08 : 1;
-      const inp = S.botInput(track, c, c.lane);
+      S.botRecover(c, dt);
+      const inp = S.botInput(track, c, c.lane, c.skill * band);
       S.stepCar(c, inp, dt, track, c.skill * band);
+      c.st = c.steer;
       if (!c.finished && c.total >= room.laps * track.len) finishCar(room, c);
 
       // pick up boxes
@@ -176,12 +186,7 @@ function tickRoom(room) {
       for (let j = i + 1; j < cars.length; j++) {
         const a = cars[i], b = cars[j];
         if (!a.bot && !b.bot) continue;
-        const dx = b.x - a.x, dy = b.y - a.y, d = Math.hypot(dx, dy);
-        if (d > 0 && d < 34) {
-          const push = (34 - d) / (a.bot && b.bot ? 2 : 1), nx = dx / d, ny = dy / d;
-          if (a.bot) { a.x -= nx * push; a.y -= ny * push; }
-          if (b.bot) { b.x += nx * push; b.y += ny * push; }
-        }
+        S.collide(a, b, a.bot, b.bot);
       }
     }
 
@@ -195,7 +200,7 @@ function tickRoom(room) {
         if (o.owner === c.id && (o.kind === 'rocket' || age < 1)) continue;
         if (Math.hypot(o.x - c.x, o.y - c.y) < 30) {
           if (c.shield > 0) c.shield = 0;
-          else { c.spin = 1.2; c.vx *= 0.35; c.vy *= 0.35; }
+          else { c.spin = 1.2; c.vx *= 0.45; c.vy *= 0.45; c.w = (Math.random() < 0.5 ? -1 : 1) * 8; }
           room.objs.delete(o.id);
           broadcast(room, { t: 'despawn', oid: o.id, hit: true, x: o.x, y: o.y });
           break;
@@ -204,12 +209,13 @@ function tickRoom(room) {
     }
   }
 
-  if (room.tickN % 2 === 0) {
+  {
     broadcast(room, {
       t: 'snap',
       cars: cars.map(c => ({
         id: c.id, x: Math.round(c.x), y: Math.round(c.y), a: +c.a.toFixed(3), sp: Math.round(c.sp),
-        total: Math.round(c.total), f: (c.spin > 0 ? 1 : 0) | (c.boost > 0 ? 2 : 0) | (c.shield > 0 ? 4 : 0),
+        total: Math.round(c.total), st: +(c.st || 0).toFixed(2),
+        f: (c.spin > 0 ? 1 : 0) | (c.boost > 0 ? 2 : 0) | (c.shield > 0 ? 4 : 0) | (c.braking ? 8 : 0),
         fin: c.finished ? c.ft : 0,
       })),
     });
@@ -279,6 +285,8 @@ wss.on('connection', ws => {
         if (!car || room.phase === 'lobby') return;
         car.x = num(m.x, car.x); car.y = num(m.y, car.y); car.a = num(m.a, car.a);
         car.sp = num(m.sp, car.sp); car.spin = num(m.spin, 0); car.boost = num(m.boost, 0); car.shield = num(m.shield, 0);
+        car.vx = num(m.vx, Math.cos(car.a) * car.sp); car.vy = num(m.vy, Math.sin(car.a) * car.sp);
+        car.st = num(m.st, 0); car.braking = !!m.br;
         // progress can't jump more than a boosted car could plausibly travel
         const nt = num(m.total, car.total);
         if (Math.abs(nt - car.total) < 400) car.total = nt;

@@ -1,7 +1,12 @@
 # Turbo Brawl
 
-Online multiplayer arcade combat racer. Up to 8 cars per room (friends + CPU drivers),
+Online multiplayer 3D combat racer. Up to 8 cars per room (friends + CPU drivers),
 power-up boxes (Turbo, Rocket, Oil Slick, Shield), 3 tracks, lobby chat, and touch controls for phones.
+
+- 3D chase camera (Three.js), hills, trees, grandstands, shadows and sky reflections
+- Tyre-model physics: grip limits, power oversteer, handbrake drifts, gears, walls and car-to-car impacts
+- Skid marks, tyre smoke, sparks, explosions, body roll
+- Procedural audio: engine through the gears, tyre squeal, crashes, wind and crowd
 
 ## Run locally
     npm install
@@ -16,9 +21,12 @@ The host picks track / laps / CPU count and starts the race.
 - **Railway / Fly.io**: same commands; the server reads `PORT` from the environment.
 
 ## Controls
-Arrows / WASD to drive, Space to use item, Enter to chat, M to mute.
+Arrows / WASD to drive, Space for handbrake, E or Shift to use an item, C to switch camera,
+Enter to chat, M to mute.
 
 ## Code layout
 - `server.js` - static file server + WebSocket rooms, CPU drivers, items, results
-- `public/shared.js` - tracks and car physics (shared by server and browser)
-- `public/game.js` - rendering, input, networking, sound
+- `public/shared.js` - tracks, car physics and CPU driving (shared by server and browser)
+- `public/world.js` - 3D scene: terrain, road, walls, scenery, car models, particles, skid marks
+- `public/audio.js` - procedural sound engine
+- `public/game.js` - game loop, input, networking, camera, HUD
