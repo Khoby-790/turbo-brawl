@@ -87,7 +87,7 @@ function handle(m) {
     case 'left':
       if (game) { const c = game.cars.get(m.id); if (c) { game.world.scene.remove(c.mesh.root); game.cars.delete(m.id); } }
       break;
-    case 'results': showResults(m.list); break;
+    case 'results': showResults(m.list, m.champ); break;
     case 'lap': onLap(m); break;
     case 'chat': addChat(m); break;
   }
@@ -154,8 +154,10 @@ $('copyBtn').onclick = () => {
 };
 for (let i = 1; i <= 9; i++) $('lapSel').add(new Option(i, i));
 for (let i = 0; i <= 7; i++) $('botSel').add(new Option(i, i));
-const sendSettings = () => send({ t: 'settings', track: +$('trackSel').value, laps: +$('lapSel').value, bots: +$('botSel').value });
-['trackSel', 'lapSel', 'botSel'].forEach(id => $(id).onchange = sendSettings);
+const sendSettings = () => send({ t: 'settings', track: +$('trackSel').value, laps: +$('lapSel').value, bots: +$('botSel').value,
+  mode: $('modeSel').value, cup: +$('cupSel').value });
+['trackSel', 'lapSel', 'botSel', 'modeSel', 'cupSel'].forEach(id => $(id).onchange = sendSettings);
+$('nextBtn').onclick = () => send({ t: 'next' });
 $('startBtn').onclick = () => { Snd.init(); send({ t: 'start' }); };
 $('againBtn').onclick = () => send({ t: 'lobby' });
 
@@ -167,7 +169,15 @@ function renderLobby() {
     L.tracks.forEach((t, i) => $('trackSel').add(new Option(t, i)));
   }
   $('trackSel').value = L.track; $('lapSel').value = L.laps; $('botSel').value = L.bots;
-  ['trackSel', 'lapSel', 'botSel'].forEach(id => $(id).disabled = !host);
+  if ($('cupSel').options.length !== L.cups.length) { $('cupSel').innerHTML = ''; L.cups.forEach((c, i) => $('cupSel').add(new Option(`${c.name} (${c.tracks.length})`, i))); }
+  $('modeSel').value = L.mode; $('cupSel').value = L.cup;
+  ['trackSel', 'lapSel', 'botSel', 'modeSel', 'cupSel'].forEach(id => $(id).disabled = !host);
+  const champMode = L.mode === 'champ';
+  $('cupWrap').classList.toggle('hidden', !champMode);
+  $('trackWrap').classList.toggle('dim', champMode);
+  $('trackSel').disabled = !host || champMode;
+  $('cupTracks').textContent = champMode ? 'Races: ' + L.cups[L.cup].tracks.join(' → ') + ' · points 10-8-6-5-4-3-2-1' : '';
+  $('startBtn').textContent = champMode ? 'Start championship' : 'Start race';
   const ul = $('playerList'); ul.innerHTML = '';
   for (const p of L.players) {
     const li = document.createElement('li');
@@ -243,8 +253,40 @@ function onLap(m) {
   }
 }
 
-function showResults(list) {
+function driverCell(r) {
+  const n = document.createElement('td');
+  const dot = document.createElement('span'); dot.className = 'dot'; dot.style.cssText = `display:inline-block;vertical-align:middle;margin-right:8px;background:${r.color}`;
+  n.append(dot, document.createTextNode(r.name + (r.bot ? ' (CPU)' : '') + (r.id === myId ? ' — you' : '') + (r.left ? ' (left)' : '')));
+  if (r.id === myId) n.style.fontWeight = '800';
+  return n;
+}
+function showResults(list, champ) {
   const tb = $('resTable'); tb.innerHTML = '';
+  $('resTitle').textContent = champ ? `Race ${champ.round + 1} of ${champ.rounds}: ${champ.tracks[champ.round]}` : 'Results';
+  // championship standings
+  $('champBox').classList.toggle('hidden', !champ);
+  $('championBanner').classList.add('hidden');
+  if (champ) {
+    $('champTitle').textContent = champ.final ? `${champ.cup}: final standings` : `${champ.cup} standings`;
+    const ct = $('champTable'); ct.innerHTML = '';
+    champ.table.forEach((d, i) => {
+      const tr = document.createElement('tr');
+      const p = document.createElement('td'); p.className = 'pos'; p.textContent = champ.final && i === 0 ? '🏆' : i + 1;
+      const g = document.createElement('td'); g.className = 'gain'; g.textContent = d.gained ? '+' + d.gained : '';
+      const pts = document.createElement('td'); pts.className = 'pts'; pts.textContent = d.pts + ' pts';
+      tr.append(p, driverCell(d), g, pts); ct.append(tr);
+    });
+    if (champ.final && champ.table.length) {
+      const w = champ.table[0], banner = $('championBanner'); banner.innerHTML = '';
+      const big = document.createElement('div'); big.className = 'big'; big.textContent = '🏆 ' + (w.id === myId ? 'YOU ARE THE CHAMPION!' : w.name + ' WINS!');
+      const sub = document.createElement('div'); sub.className = 'note'; sub.textContent = `${champ.cup} champion with ${w.pts} points`;
+      banner.append(big, sub); banner.classList.remove('hidden');
+    }
+  }
+  const host = lobby && lobby.hostId === myId;
+  $('nextBtn').classList.toggle('hidden', !(champ && !champ.final && host));
+  if (champ && !champ.final) $('nextBtn').textContent = `Next race (${champ.round + 2}/${champ.rounds}): ${champ.next}`;
+  $('againBtn').textContent = champ && !champ.final ? 'Quit championship' : 'Back to garage';
   list.forEach((r, i) => {
     const tr = document.createElement('tr');
     const p = document.createElement('td'); p.className = 'pos'; p.textContent = i + 1;
@@ -254,11 +296,14 @@ function showResults(list) {
     if (r.id === myId) n.style.fontWeight = '800';
     const t = document.createElement('td'); t.className = 'time'; t.textContent = fmtTime(r.time);
     const bl = document.createElement('td'); bl.className = 'time'; bl.textContent = r.best ? 'best ' + fmtTime(r.best) : '';
-    tr.append(p, n, t, bl); tb.append(tr);
+    tr.append(p, n, t, bl);
+    if (champ) { const pt = document.createElement('td'); pt.className = 'gain'; pt.textContent = r.pts ? '+' + r.pts : ''; tr.append(pt); }
+    tb.append(tr);
   });
   if (lobby) renderLobby();
   show('results');
   Snd.cheer();
+  if (champ && champ.final) { Snd.tone(523, 0.2, 'triangle', 0.08); Snd.tone(659, 0.2, 'triangle', 0.08); Snd.tone(784, 0.5, 'triangle', 0.08); }
 }
 
 function addChat(m) {
@@ -342,7 +387,7 @@ function startGame(m) {
   });
   game = {
     world, track, scene, laps: m.laps, cars, me, boxes,
-    goAt: performance.now() + m.delay, lastBeep: 4,
+    goAt: performance.now() + m.delay, lastBeep: 4, champ: m.champ || null,
     objs: new Map(), parts: new Particles(scene), skids: new Skids(scene), rings: [], warn: false,
     item: null, itemFlash: 0, pending: false, lastSend: 0, firedLatch: false,
     lapShown: 1, lapBanner: 0, shake: 0, camYaw: me.a, camPos: null, fov: 64,
@@ -821,10 +866,22 @@ function drawHud(now) {
   ctx.beginPath(); ctx.arc((me.x - b.minX) * sc, (me.y - b.minY) * sc, 6, 0, 6.283); ctx.fill(); ctx.stroke();
   ctx.restore();
 
+  // championship tag
+  if (g.champ) {
+    const tag = `${g.champ.cup.toUpperCase()} · RACE ${g.champ.round + 1}/${g.champ.rounds}`;
+    ctx.font = '800 12px Inter,sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const tw = ctx.measureText(tag).width + 26, ty = isTouch ? 96 : 30;
+    panel(W / 2 - tw / 2, ty - 14, tw, 28);
+    ctx.fillStyle = '#ffc53d'; ctx.fillText(tag, W / 2, ty);
+  }
   // center messages
   ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
   const left = (g.goAt - now) / 1000;
-  if (left > 0) bigText(Math.ceil(left), '#fff', 1 + (left % 1) * 0.4);
+  if (left > 0) {
+    bigText(Math.ceil(left), '#fff', 1 + (left % 1) * 0.4);
+    ctx.font = '800 18px Inter,sans-serif'; ctx.fillStyle = '#fff'; ctx.textAlign = 'center';
+    ctx.fillText(track.name + (g.champ ? ` · Race ${g.champ.round + 1} of ${g.champ.rounds}` : ''), W / 2, H * 0.3 + 74);
+  }
   else if (left > -0.9) bigText('GO!', '#ffc53d', 1 + (-left) * 0.5);
   else if (g.lapBanner > 0) bigText(lap === g.laps ? 'FINAL LAP' : 'LAP ' + lap, '#fff', 0.6);
   else if (me.fin) bigText(pos + ordinal(pos) + '!', '#ffc53d', 0.8);

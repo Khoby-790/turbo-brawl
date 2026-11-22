@@ -70,8 +70,51 @@ function broadcast(room, m) {
   const s = JSON.stringify(m);
   for (const p of room.players.values()) if (p.ws.readyState === 1) p.ws.send(s);
 }
+// ---------- championship ----------
+const CUPS = [
+  { name: 'Classic Cup', tracks: [0, 1, 2] },
+  { name: 'World Cup', tracks: [3, 4, 5] },
+  { name: 'Grand Tour', tracks: [0, 1, 2, 3, 4, 5] },
+];
+const POINTS = [10, 8, 6, 5, 4, 3, 2, 1];
+
+function champTable(room) {
+  const ch = room.champ;
+  return [...ch.drivers.values()]
+    .sort((a, b) => b.pts - a.pts || a.posSum - b.posSum || a.name.localeCompare(b.name))
+    .map(d => ({ id: d.id, name: d.name, color: d.color, bot: d.bot, car: d.car, pts: d.pts, gained: d.gained, left: !!d.left }));
+}
+function champInfo(room) {
+  const ch = room.champ;
+  if (!ch) return null;
+  return { cup: CUPS[ch.cup].name, round: ch.round, rounds: ch.tracks.length, tracks: ch.tracks.map(i => S.TRACKS[i].name) };
+}
+function startChampionship(room) {
+  const types = Object.keys(S.CARS);
+  room.champ = {
+    cup: room.cup, tracks: CUPS[room.cup].tracks.slice(), round: 0, drivers: new Map(),
+    botCars: Array.from({ length: 8 }, () => types[Math.floor(Math.random() * types.length)]), // CPU drivers keep their car all cup
+  };
+  room.trackIdx = room.champ.tracks[0];
+  startRace(room);
+}
+// Award points after a race. `order` is the finishing order of cars.
+function scoreRace(room, order) {
+  const ch = room.champ;
+  for (const d of ch.drivers.values()) d.gained = 0;
+  order.forEach((c, i) => {
+    let d = ch.drivers.get(c.id);
+    if (!d) ch.drivers.set(c.id, d = { id: c.id, name: c.name, color: c.color, bot: c.bot, car: c.car, pts: 0, posSum: 0, gained: 0 });
+    d.car = c.car;
+    const pts = c.finished ? (POINTS[i] || 0) : 0;
+    d.pts += pts; d.gained = pts; d.posSum += i + 1;
+  });
+}
+
 function lobbyMsg(room) {
   return {
+    mode: room.mode, cup: room.cup, cups: CUPS.map(c => ({ name: c.name, tracks: c.tracks.map(i => S.TRACKS[i].name) })),
+    champ: champInfo(room),
     t: 'lobby', code: room.code, hostId: room.hostId, phase: room.phase,
     track: room.trackIdx, laps: room.laps, bots: room.bots,
     tracks: S.TRACKS.map(t => t.name),
@@ -94,9 +137,15 @@ function startRace(room) {
   const entrants = [];
   for (let i = 0; i < botCount; i++) {
     const types = Object.keys(S.CARS);
-    entrants.push({ id: 'b' + i, name: BOT_NAMES[i], color: botColors[i % botColors.length], bot: true, car: types[Math.floor(Math.random() * types.length)] });
+    const car = room.champ ? room.champ.botCars[i] : types[Math.floor(Math.random() * types.length)];
+    entrants.push({ id: 'b' + i, name: BOT_NAMES[i], color: botColors[i % botColors.length], bot: true, car });
   }
   for (const h of humans) entrants.push({ id: h.id, name: h.name, color: h.color, bot: false, car: h.car });
+  if (room.champ && room.champ.round > 0) {
+    // reverse championship order: the points leader starts at the back
+    const pts = id => (room.champ.drivers.get(id) || { pts: 0 }).pts;
+    entrants.sort((a, b) => pts(a.id) - pts(b.id));
+  }
 
   room.cars = new Map();
   entrants.forEach((e, slot) => {
@@ -119,7 +168,7 @@ function startRace(room) {
   room.tickN = 0;
   broadcast(room, lobbyMsg(room));
   broadcast(room, {
-    t: 'start', track: room.trackIdx, laps: room.laps, delay: 3500,
+    t: 'start', track: room.trackIdx, laps: room.laps, delay: 3500, champ: champInfo(room),
     cars: [...room.cars.values()].map(c => ({ id: c.id, name: c.name, color: c.color, bot: c.bot, car: c.car, x: c.x, y: c.y, a: c.a })),
   });
 }
@@ -201,9 +250,18 @@ function endRace(room) {
   const cars = [...room.cars.values()];
   const fin = cars.filter(c => c.finished).sort((a, b) => a.ft - b.ft);
   const dnf = cars.filter(c => !c.finished).sort((a, b) => b.total - a.total);
+  const order = [...fin, ...dnf];
+  let champ = null;
+  if (room.champ) {
+    scoreRace(room, order);
+    const final = room.champ.round >= room.champ.tracks.length - 1;
+    champ = Object.assign(champInfo(room), { final, table: champTable(room),
+      next: final ? null : S.TRACKS[room.champ.tracks[room.champ.round + 1]].name });
+  }
   broadcast(room, {
-    t: 'results',
-    list: [...fin, ...dnf].map(c => ({ id: c.id, name: c.name, color: c.color, bot: c.bot, car: c.car, time: c.finished ? c.ft : null, best: c.bestLap || null })),
+    t: 'results', champ,
+    list: order.map((c, i) => ({ id: c.id, name: c.name, color: c.color, bot: c.bot, car: c.car, time: c.finished ? c.ft : null, best: c.bestLap || null,
+      pts: room.champ ? (c.finished ? (POINTS[i] || 0) : 0) : null })),
   });
   broadcast(room, lobbyMsg(room));
 }
@@ -346,7 +404,7 @@ wss.on('connection', ws => {
       if (c && !rooms.has(c)) c = '';
       if (!c) {
         c = code();
-        rooms.set(c, { code: c, players: new Map(), hostId: null, phase: 'lobby', trackIdx: 0, laps: 3, bots: 3 });
+        rooms.set(c, { code: c, players: new Map(), hostId: null, phase: 'lobby', trackIdx: 0, laps: 3, bots: 3, mode: 'race', cup: 0, champ: null });
       }
       room = rooms.get(c);
       if (room.players.size >= MAX_CARS) { send(ws, { t: 'error', msg: 'That room is full.' }); room = null; return; }
@@ -367,16 +425,25 @@ wss.on('connection', ws => {
         if (Number.isInteger(m.track) && m.track >= 0 && m.track < S.TRACKS.length) room.trackIdx = m.track;
         if (Number.isInteger(m.laps)) room.laps = Math.max(1, Math.min(9, m.laps));
         if (Number.isInteger(m.bots)) room.bots = Math.max(0, Math.min(7, m.bots));
+        if (m.mode === 'race' || m.mode === 'champ') room.mode = m.mode;
+        if (Number.isInteger(m.cup) && m.cup >= 0 && m.cup < CUPS.length) room.cup = m.cup;
         broadcast(room, lobbyMsg(room));
         break;
       case 'car':
         if (S.CARS[m.car] && room.phase !== 'racing') { me.car = m.car; broadcast(room, lobbyMsg(room)); }
         break;
       case 'start':
-        if (isHost && room.phase === 'lobby') startRace(room);
+        if (isHost && room.phase === 'lobby') { if (room.mode === 'champ') startChampionship(room); else { room.champ = null; startRace(room); } }
+        break;
+      case 'next': // next round of a championship
+        if (isHost && room.phase === 'results' && room.champ && room.champ.round < room.champ.tracks.length - 1) {
+          room.champ.round++;
+          room.trackIdx = room.champ.tracks[room.champ.round];
+          startRace(room);
+        }
         break;
       case 'lobby':
-        if (isHost && room.phase === 'results') { room.phase = 'lobby'; room.cars = null; broadcast(room, lobbyMsg(room)); }
+        if (isHost && room.phase === 'results') { room.phase = 'lobby'; room.cars = null; room.champ = null; broadcast(room, lobbyMsg(room)); }
         break;
       case 'state':
         if (!car || room.phase === 'lobby') return;
@@ -423,6 +490,7 @@ wss.on('connection', ws => {
   ws.on('close', () => {
     if (!me || !room) return;
     room.players.delete(me.id);
+    if (room.champ && room.champ.drivers.has(me.id)) room.champ.drivers.get(me.id).left = true;
     if (room.cars) room.cars.delete(me.id);
     if (room.players.size === 0) { rooms.delete(room.code); return; }
     if (room.hostId === me.id) room.hostId = room.players.keys().next().value;

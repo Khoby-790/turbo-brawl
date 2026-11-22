@@ -22,6 +22,14 @@ Desert Dash, Alpine Pass, Palm Beach, Downtown Dusk), lobby chat, and touch cont
     npm install
     npm start          # http://localhost:3000
 
+## Championship
+In the garage the host can switch **Mode** to **Championship** and pick a cup:
+Classic Cup (Canyon Loop, Harbor Hairpins, Desert Dash), World Cup (Alpine Pass, Palm Beach,
+Downtown Dusk) or Grand Tour (all six). Finishing positions score 10-8-6-5-4-3-2-1 points; CPU
+drivers score too and keep the same car all cup. From race 2 the grid starts in reverse championship
+order. After each race the standings are shown and the host starts the next race; the driver with
+the most points after the last race is champion.
+
 ## Leaderboard
 Every lap is timed on the server; the best lap per driver on each track is kept, and the top 10
 are shown from the 🏆 Leaderboard button (JSON at `/api/leaderboard`).

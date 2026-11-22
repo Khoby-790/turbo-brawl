@@ -48,6 +48,15 @@
   .bar { display:flex; gap:3px; } .bar i { flex:1; height:7px; border-radius:2px; background:rgba(255,255,255,.1); } .bar i.on { background:linear-gradient(90deg,var(--hot2),var(--hot)); }
   .carname { color:var(--muted); font-size:12px; margin-left:6px; }
   @media (min-width: 900px) { #lobby { justify-content:flex-start; padding-left:6vw; } }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .cuptracks { font-size:12px; color:var(--muted); margin-top:8px; }
+  #trackWrap.dim select { opacity:.4; }
+  h3 { font-family:Bungee,Impact,sans-serif; font-weight:400; font-size:17px; margin:6px 0 8px; color:var(--hot2); }
+  td.pts { text-align:right; font-weight:800; font-variant-numeric:tabular-nums; }
+  td.gain { text-align:right; color:#5ee07a; font-size:12px; width:44px; }
+  #nextBtn { margin-bottom:10px; }
+  .champion { text-align:center; padding:14px; margin-bottom:12px; border-radius:14px; background:linear-gradient(135deg,rgba(255,197,61,.25),rgba(255,90,31,.2)); border:1px solid rgba(255,197,61,.5); }
+  .champion .big { font-family:Bungee,Impact,sans-serif; font-size:28px; color:var(--hot2); }
   .card.wide { width:min(560px,100%); }
   .tabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
   .tabs button { width:auto; padding:7px 11px; font-size:13px; background:#0d0c14; color:var(--ink); border:1px solid var(--line); box-shadow:none; font-weight:700; }
@@ -59,7 +68,7 @@
   table { width:100%; border-collapse:collapse; margin-bottom:16px; }
   td { padding:8px 6px; border-bottom:1px solid var(--line); }
   td.pos { font-family:Bungee,sans-serif; width:40px; color:var(--hot2); }
-  td.time { text-align:right; font-variant-numeric:tabular-nums; color:var(--muted); }
+  td.time { text-align:right; font-variant-numeric:tabular-nums; color:var(--muted); white-space:nowrap; }
   .keys { font-size:12px; color:var(--muted); margin-top:18px; line-height:1.7; }
   kbd { background:#0d0c14; border:1px solid var(--line); border-bottom-width:2px; border-radius:5px; padding:1px 6px; font-family:inherit; font-size:11px; }
   #chat { position:fixed; left:16px; bottom:16px; z-index:4; width:min(320px,calc(100% - 32px)); pointer-events:none; }
@@ -116,8 +125,13 @@
     <label>Your car</label>
     <div class="cars" id="carGrid"></div>
     <div class="carinfo" id="carInfo"></div>
+    <div class="grid2">
+      <div><label for="modeSel">Mode</label><select id="modeSel"><option value="race">Single race</option><option value="champ">Championship</option></select></div>
+      <div id="cupWrap"><label for="cupSel">Cup</label><select id="cupSel"></select></div>
+    </div>
+    <div class="cuptracks" id="cupTracks"></div>
     <div class="grid3">
-      <div><label for="trackSel">Track</label><select id="trackSel"></select></div>
+      <div id="trackWrap"><label for="trackSel">Track</label><select id="trackSel"></select></div>
       <div><label for="lapSel">Laps</label><select id="lapSel"></select></div>
       <div><label for="botSel">CPU</label><select id="botSel"></select></div>
     </div>
@@ -139,9 +153,15 @@
 </div>
 
 <div id="results" class="screen hidden">
-  <div class="card">
-    <h2>Results</h2>
+  <div class="card wide">
+    <div class="champion hidden" id="championBanner"></div>
+    <h2 id="resTitle">Results</h2>
     <table id="resTable"></table>
+    <div id="champBox" class="hidden">
+      <h3 id="champTitle"></h3>
+      <table id="champTable"></table>
+    </div>
+    <button id="nextBtn" class="hidden">Next race</button>
     <button id="againBtn">Back to garage</button>
     <div class="row"><button class="ghost boardBtn">🏆 Leaderboard</button></div>
     <div class="note" id="resNote"></div>
