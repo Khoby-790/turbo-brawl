@@ -775,6 +775,38 @@ export function makeRocketMesh() {
   body.castShadow = true;
   return g;
 }
+export function makeHomingMesh() {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(3.4, 3.4, 22, 12).rotateZ(Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x2b2f38, metalness: 0.7, roughness: 0.3 }));
+  const nose = new THREE.Mesh(new THREE.ConeGeometry(3.4, 9, 12).rotateZ(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0xff3030, emissive: 0xff2020, emissiveIntensity: 0.8 }));
+  nose.position.x = 15.5;
+  const fire = new THREE.Mesh(new THREE.ConeGeometry(3.8, 16, 8).rotateZ(Math.PI / 2), new THREE.MeshBasicMaterial({ color: 0xff7a30, blending: THREE.AdditiveBlending, transparent: true }));
+  fire.position.x = -19;
+  g.add(body, nose, fire);
+  for (let i = 0; i < 4; i++) {
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(6, 0.6, 5), new THREE.MeshStandardMaterial({ color: 0xff3030 }));
+    fin.position.set(-8, Math.cos(i * Math.PI / 2) * 4, Math.sin(i * Math.PI / 2) * 4); fin.rotation.x = i * Math.PI / 2; g.add(fin);
+  }
+  body.castShadow = true;
+  return g;
+}
+export function makeMineMesh() {
+  const g = new THREE.Group();
+  const shell = new THREE.Mesh(new THREE.SphereGeometry(9, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x30343c, metalness: 0.6, roughness: 0.4 }));
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(9.6, 9.6, 2, 16), new THREE.MeshStandardMaterial({ color: 0xffc21a }));
+  band.position.y = 1;
+  const light = new THREE.Mesh(new THREE.SphereGeometry(2, 10, 8), new THREE.MeshStandardMaterial({ color: 0x400000, emissive: 0xff2010, emissiveIntensity: 0 }));
+  light.position.y = 9;
+  for (let i = 0; i < 6; i++) {
+    const spike = new THREE.Mesh(new THREE.ConeGeometry(1.2, 4, 6), shell.material);
+    const a = (i / 6) * Math.PI * 2; spike.position.set(Math.cos(a) * 7, 5, Math.sin(a) * 7); spike.lookAt(Math.cos(a) * 20, 12, Math.sin(a) * 20); spike.rotateX(Math.PI / 2);
+    g.add(spike);
+  }
+  g.add(shell, band, light);
+  shell.castShadow = true;
+  g.userData.light = light;
+  return g;
+}
 export function makeOilMesh() {
   const m = new THREE.Mesh(new THREE.CircleGeometry(30, 24), new THREE.MeshStandardMaterial({ color: 0x0b0812, roughness: 0.05, metalness: 0.4, transparent: true, opacity: 0.9 }));
   m.rotation.x = -Math.PI / 2; m.scale.set(1, 0.75, 1);

@@ -110,25 +110,75 @@ function startRace(room) {
   });
 }
 
-function spawnObj(room, owner, kind, x, y, a, sp) {
+// race position as 0 (leading) .. 1 (last), used for item odds and missile targets
+function standings(room) {
+  return [...room.cars.values()].sort((a, b) => (a.finished && b.finished) ? a.ft - b.ft : a.finished ? -1 : b.finished ? 1 : b.total - a.total);
+}
+function placeFrac(room, car) {
+  const list = standings(room), n = list.length;
+  return n > 1 ? list.indexOf(car) / (n - 1) : 0;
+}
+// homing target: the car directly ahead in the race (or the runner-up if you're leading)
+function homingTarget(room, car) {
+  const list = standings(room), i = list.indexOf(car);
+  const t = i > 0 ? list[i - 1] : list[1];
+  return t && t !== car ? t.id : null;
+}
+
+function spawnObj(room, owner, kind, x, y, a, sp, extra) {
   const id = room.nextObj++;
   const cx = Math.cos(a), cy = Math.sin(a);
   let o;
-  if (kind === 'rocket') {
-    const v = 1150 + Math.max(0, sp);
-    o = { id, kind, owner, x: x + cx * 40, y: y + cy * 40, vx: cx * v, vy: cy * v, life: 2.2 };
+  if (kind === 'rocket' || kind === 'homing') {
+    const v = (kind === 'homing' ? S.PROJ.homingV : S.PROJ.rocketV) + Math.max(0, sp) * (kind === 'homing' ? 0.5 : 1);
+    o = { id, kind, owner, x: x + cx * 40, y: y + cy * 40, vx: cx * v, vy: cy * v, life: kind === 'homing' ? S.PROJ.homingLife : S.PROJ.rocketLife };
   } else {
-    o = { id, kind, owner, x: x - cx * 42, y: y - cy * 42, vx: 0, vy: 0, life: 20 };
+    o = { id, kind, owner, x: x - cx * 42, y: y - cy * 42, vx: 0, vy: 0, life: kind === 'mine' ? S.PROJ.mineLife : 20 };
   }
+  Object.assign(o, extra || {});
   o.born = Date.now();
   room.objs.set(id, o);
   broadcast(room, { t: 'spawn', o });
 }
 
-function useItem(room, car, kind) {
+// Fire an item that creates something in the world (shared by players and CPU drivers).
+function fireItem(room, car, kind) {
+  if (kind === 'rocket' || kind === 'oil' || kind === 'mine') spawnObj(room, car.id, kind, car.x, car.y, car.a, car.sp);
+  else if (kind === 'triple') for (const da of [-0.13, 0, 0.13]) spawnObj(room, car.id, 'rocket', car.x, car.y, car.a + da, car.sp);
+  else if (kind === 'homing') spawnObj(room, car.id, 'homing', car.x, car.y, car.a, car.sp, { target: homingTarget(room, car) });
+  else if (kind === 'shockwave') {
+    broadcast(room, { t: 'blast', x: Math.round(car.x), y: Math.round(car.y), owner: car.id, r: S.PROJ.blastR });
+    for (const c of room.cars.values()) {
+      if (!c.bot || c.id === car.id || c.spin > 0) continue;
+      if (Math.hypot(c.x - car.x, c.y - car.y) < S.PROJ.blastR) S.applyHit(c, 'shockwave');
+    }
+  }
+}
+
+function useItem(room, car, kind) { // CPU drivers
   if (kind === 'boost') car.boost = 1.8;
   else if (kind === 'shield') car.shield = 6;
-  else if (kind === 'rocket' || kind === 'oil') spawnObj(room, car.id, kind, car.x, car.y, car.a, car.sp);
+  else if (kind === 'mega') { car.boost = 3.2; car.mega = 3.2; }
+  else fireItem(room, car, kind);
+}
+
+// Should a CPU driver use its item now? Aims rockets, drops traps behind, waits for crowds.
+function botWantsToUse(room, c, now) {
+  if (c.spin > 0 || c.inAir) return false;
+  if (now > c.itemAt + 6000) return true; // don't hoard forever
+  if (now < c.itemAt) return false;
+  const others = [...room.cars.values()].filter(o => o !== c);
+  const fx = Math.cos(c.a), fy = Math.sin(c.a);
+  const ahead = others.some(o => { const dx = o.x - c.x, dy = o.y - c.y, d = Math.hypot(dx, dy); return d < 900 && d > 40 && (dx * fx + dy * fy) / d > 0.93; });
+  const behind = others.some(o => { const dx = o.x - c.x, dy = o.y - c.y, d = Math.hypot(dx, dy); return d < 500 && (dx * fx + dy * fy) / d < -0.6; });
+  const near = others.filter(o => Math.hypot(o.x - c.x, o.y - c.y) < S.PROJ.blastR * 0.85).length;
+  switch (c.item) {
+    case 'rocket': case 'triple': return ahead;
+    case 'oil': case 'mine': return behind;
+    case 'shockwave': return near >= 1;
+    case 'shield': return true;
+    default: return c.sp > 300; // boosts on the move
+  }
 }
 
 function endRace(room) {
@@ -182,12 +232,12 @@ function tickRoom(room) {
           if (Math.hypot(b.x - c.x, b.y - c.y) < 36) {
             room.boxTaken[b.id] = now + S.BOX_RESPAWN_MS;
             broadcast(room, { t: 'box', id: b.id, ms: S.BOX_RESPAWN_MS });
-            c.item = S.ITEMS[Math.floor(Math.random() * S.ITEMS.length)];
-            c.itemAt = now + 600 + Math.random() * 2500;
+            c.item = S.rollItem(placeFrac(room, c));
+            c.itemAt = now + 500 + Math.random() * 1200;
             break;
           }
         }
-      } else if (now >= c.itemAt && c.spin <= 0) {
+      } else if (botWantsToUse(room, c, now)) {
         useItem(room, c, c.item);
         c.item = null;
       }
@@ -206,15 +256,13 @@ function tickRoom(room) {
     for (const o of room.objs.values()) {
       const age = (now - o.born) / 1000;
       if (age > o.life) { room.objs.delete(o.id); continue; }
-      o.x += o.vx * dt; o.y += o.vy * dt;
+      S.stepProjectile(o, dt, o.target ? room.cars.get(o.target) : null, age);
       for (const c of cars) {
-        if (!c.bot || c.spin > 0) continue;
-        if (o.owner === c.id && (o.kind === 'rocket' || age < 1)) continue;
+        if (!c.bot || c.spin > 0 || !S.canHit(o, c.id, age)) continue;
         if (Math.hypot(o.x - c.x, o.y - c.y) < 30) {
-          if (c.shield > 0) c.shield = 0;
-          else { c.spin = 1.2; c.vx *= 0.45; c.vy *= 0.45; c.w = (Math.random() < 0.5 ? -1 : 1) * 8; }
+          S.applyHit(c, o.kind);
           room.objs.delete(o.id);
-          broadcast(room, { t: 'despawn', oid: o.id, hit: true, x: o.x, y: o.y });
+          broadcast(room, { t: 'despawn', oid: o.id, hit: true, kind: o.kind, x: o.x, y: o.y });
           break;
         }
       }
@@ -227,7 +275,7 @@ function tickRoom(room) {
       cars: cars.map(c => ({
         id: c.id, x: Math.round(c.x), y: Math.round(c.y), z: Math.round(c.z || 0), a: +c.a.toFixed(3), sp: Math.round(c.sp),
         total: Math.round(c.total), st: +(c.st || 0).toFixed(2),
-        f: (c.spin > 0 ? 1 : 0) | (c.boost > 0 ? 2 : 0) | (c.shield > 0 ? 4 : 0) | (c.braking ? 8 : 0) | (c.ghost > 0 ? 16 : 0),
+        f: (c.spin > 0 ? 1 : 0) | (c.boost > 0 ? 2 : 0) | (c.shield > 0 ? 4 : 0) | (c.braking ? 8 : 0) | (c.ghost > 0 ? 16 : 0) | (c.mega > 0 ? 32 : 0),
         fin: c.finished ? c.ft : 0,
       })),
     });
@@ -301,7 +349,7 @@ wss.on('connection', ws => {
         car.x = num(m.x, car.x); car.y = num(m.y, car.y); car.a = num(m.a, car.a);
         car.sp = num(m.sp, car.sp); car.spin = num(m.spin, 0); car.boost = num(m.boost, 0); car.shield = num(m.shield, 0);
         car.vx = num(m.vx, Math.cos(car.a) * car.sp); car.vy = num(m.vy, Math.sin(car.a) * car.sp);
-        car.st = num(m.st, 0); car.braking = !!m.br; car.ghost = m.gh ? 1 : 0; car.z = num(m.z, 0);
+        car.st = num(m.st, 0); car.braking = !!m.br; car.ghost = m.gh ? 1 : 0; car.z = num(m.z, 0); car.mega = num(m.mega, 0);
         // progress can't jump more than a boosted car could plausibly travel
         const nt = num(m.total, car.total);
         if (Math.abs(nt - car.total) < 400) car.total = nt;
@@ -313,18 +361,19 @@ wss.on('connection', ws => {
         if (b && (room.boxTaken[b.id] || 0) <= now && Math.hypot(b.x - car.x, b.y - car.y) < 140) {
           room.boxTaken[b.id] = now + S.BOX_RESPAWN_MS;
           broadcast(room, { t: 'box', id: b.id, ms: S.BOX_RESPAWN_MS });
-          send(ws, { t: 'item', kind: S.ITEMS[Math.floor(Math.random() * S.ITEMS.length)] });
+          send(ws, { t: 'item', kind: S.rollItem(placeFrac(room, car)) });
         } else send(ws, { t: 'item', kind: null });
         break;
       }
       case 'use':
         if (!car || room.phase !== 'racing') return;
-        if (m.kind === 'rocket' || m.kind === 'oil') spawnObj(room, me.id, m.kind, car.x, car.y, car.a, car.sp);
+        if (['rocket', 'oil', 'mine', 'triple', 'homing', 'shockwave'].includes(m.kind)) fireItem(room, car, m.kind);
         break;
       case 'hit':
         if (!room.objs || !room.objs.has(m.oid)) return;
+        const hitObj = room.objs.get(m.oid);
         room.objs.delete(m.oid);
-        broadcast(room, { t: 'despawn', oid: m.oid, hit: true, x: num(m.x, 0), y: num(m.y, 0) });
+        broadcast(room, { t: 'despawn', oid: m.oid, hit: true, kind: hitObj.kind, x: num(m.x, 0), y: num(m.y, 0) });
         break;
       case 'finish':
         if (car && room.phase === 'racing' && car.total >= room.laps * room.track.len - 300) finishCar(room, car);

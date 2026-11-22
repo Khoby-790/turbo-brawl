@@ -65,7 +65,50 @@
     },
   ];
 
-  const ITEMS = ['boost', 'rocket', 'oil', 'shield'];
+  const ITEMS = ['boost', 'rocket', 'oil', 'shield', 'mine', 'triple', 'homing', 'shockwave', 'mega'];
+  // Item odds by race position: [weight when leading, weight when last]. Leaders get defence,
+  // trailing cars get the big stuff (keeps races close).
+  const ITEM_ODDS = {
+    boost: [3, 3], rocket: [3, 2], oil: [3, 1], shield: [3, 1], mine: [3, 1.2],
+    triple: [0.8, 3], homing: [0.6, 3], shockwave: [0.3, 2.4], mega: [0.1, 2.2],
+  };
+  function rollItem(frac) { // frac: 0 = leader, 1 = last place
+    let total = 0; const w = {};
+    for (const k of ITEMS) { const [a, b] = ITEM_ODDS[k]; w[k] = a + (b - a) * frac; total += w[k]; }
+    let r = Math.random() * total;
+    for (const k of ITEMS) { r -= w[k]; if (r <= 0) return k; }
+    return 'boost';
+  }
+  const PROJ = { rocketV: 1150, homingV: 980, homingTurn: 2.7, homingLife: 4.2, rocketLife: 2.2, mineArm: 0.6, mineLife: 25, blastR: 290 };
+
+  // Advance a projectile. `target` (optional) is {x, y} for homing missiles.
+  function stepProjectile(o, dt, target, age) {
+    if (o.kind === 'homing' && target && age > 0.25) {
+      const sp = Math.hypot(o.vx, o.vy), cur = Math.atan2(o.vy, o.vx);
+      const want = Math.atan2(target.y - o.y, target.x - o.x);
+      const turn = Math.max(-PROJ.homingTurn * dt, Math.min(PROJ.homingTurn * dt, wrapAngle(want - cur)));
+      o.vx = Math.cos(cur + turn) * sp; o.vy = Math.sin(cur + turn) * sp;
+    }
+    o.x += o.vx * dt; o.y += o.vy * dt;
+  }
+  // Can this object hit this car right now?
+  function canHit(o, carId, age) {
+    if (o.kind === 'mine' && age < PROJ.mineArm) return false;
+    if (o.owner === carId && (o.kind === 'rocket' || o.kind === 'homing' || age < 1)) return false;
+    return true;
+  }
+  // Apply a hit to a car; returns 'immune' | 'shield' | 'hit'. Same rules everywhere.
+  function applyHit(c, kind) {
+    if (c.mega > 0) return 'immune';
+    if (c.shield > 0) { c.shield = 0; return 'shield'; }
+    c.vx *= 0.45; c.vy *= 0.45; c.w = (Math.random() < 0.5 ? -1 : 1) * 8;
+    c.spin = 1.2; c.spin0 = undefined;
+    if (kind === 'mine' || kind === 'shockwave') {
+      // blown into the air
+      c.spin = 1.0; c.vz = kind === 'mine' ? 230 : 140; c.inAir = true; c.airT = 0; c.airRot = 0; c.stunt = null;
+    }
+    return 'hit';
+  }
 
   // Selectable cars. `mods` scale the physics; `stats` (1-5) are what the garage shows.
   const BASE_MODS = { vmax: 1, engine: 1, grip: 1, rear: 1, offGrip: 1, offV: 1, dirtGrip: 1, dirtV: 1, mass: 1, air: 1, spin: 1 };
@@ -411,6 +454,7 @@
   }
 
   function land(c) {
+    if (c.spin > 0) { c.landImpact = -c.vz; c.vz = 0; c.inAir = false; c.stunt = null; return; }
     const impact = -c.vz, spd = Math.hypot(c.vx, c.vy), vh = Math.atan2(c.vy, c.vx);
     const diff = Math.abs(wrapAngle(c.a - vh));
     const spins = Math.floor((Math.abs(c.airRot) + 0.7) / (Math.PI * 2));
@@ -620,6 +664,7 @@
     if (c.spin > 0) c.spin -= dt;
     if (c.wallT > 0) c.wallT -= dt;
     if (c.ghost > 0) c.ghost -= dt;
+    if (c.mega > 0) c.mega -= dt;
     if (c.boost > 0) c.boost -= dt;
     if (c.shield > 0) c.shield -= dt;
     locate(track, c);
@@ -665,7 +710,7 @@
     if (moveB) { b.x += nx * pen * share; b.y += ny * pen * share; }
     const rel = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
     if (rel >= 0) return 0;
-    const ma = carMods(a).mass, mb = carMods(b).mass;
+    const ma = carMods(a).mass * (a.mega > 0 ? 4 : 1), mb = carMods(b).mass * (b.mega > 0 ? 4 : 1);
     const j = -(1 + 0.35) * rel;
     const ja = (j * mb) / (ma + mb), jb = (j * ma) / (ma + mb); // heavier car moves less
     // contact point offset along each car's heading gives a yaw kick
@@ -776,7 +821,7 @@
     }
   }
 
-  return { TRACKS, ITEMS, CARS, PHYS, BOX_RESPAWN_MS, buildTrack, nearest, nearestOn, makeCar, stepCar, collide, resetCar,
+  return { TRACKS, ITEMS, ITEM_ODDS, PROJ, rollItem, stepProjectile, canHit, applyHit, CARS, PHYS, BOX_RESPAWN_MS, buildTrack, nearest, nearestOn, makeCar, stepCar, collide, resetCar,
     locate, envelope, groundAt, clearance, roadPoint,
     botInput, botRecover, wrapAngle };
 });

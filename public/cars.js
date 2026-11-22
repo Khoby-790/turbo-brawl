@@ -295,7 +295,13 @@ export function poseCar(m, s, dt) {
   m.shadow.material.opacity = 0.85 * Math.max(0, 1 - z / 70);
   m.shadow.scale.setScalar(1 + z / 90);
   m.tailMat.emissiveIntensity = s.braking ? 3.2 : 0.5;
-  m.shield.visible = !!s.shield;
+  // shield bubble (blue), or a fiery aura during Mega Turbo
+  m.shield.visible = !!s.shield || !!s.mega;
+  if (m.shield.visible) {
+    const mat = m.shield.material;
+    mat.color.set(s.mega ? 0xff8a2a : 0x5ac8ff); mat.emissive.set(s.mega ? 0xff5a10 : 0x2a88cc);
+    mat.opacity = s.mega ? 0.1 + Math.random() * 0.06 : 0.22;
+  }
   m.flame.visible = !!s.boost;
-  if (s.boost) m.flame.scale.set(0.7 + Math.random() * 0.6, 1, 1);
+  if (s.boost) { const k = s.mega ? 1.25 : 1; m.flame.scale.set((0.7 + Math.random() * 0.6) * k, k, k); }
 }

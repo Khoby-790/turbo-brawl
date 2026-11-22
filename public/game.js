@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { Snd } from './audio.js';
 import { Q, QNAME, makeComposer, saveQuality } from './gfx.js';
 import { makeCarMesh, poseCar, CAR_TYPES } from './cars.js';
-import { buildWorld, makeBoxMesh, makeRocketMesh, makeOilMesh, Particles, Skids, isTouch } from './world.js';
+import { buildWorld, makeBoxMesh, makeRocketMesh, makeOilMesh, makeHomingMesh, makeMineMesh, Particles, Skids, isTouch } from './world.js';
 
 const S = window.Shared;
 const $ = id => document.getElementById(id);
@@ -78,8 +78,9 @@ function handle(m) {
     case 'despawn':
       if (!game) break;
       removeObj(m.oid);
-      if (m.hit) explode(m.x, m.y);
+      if (m.hit) explode(m.x, m.y, m.kind === 'mine' ? 1.6 : 1);
       break;
+    case 'blast': if (game) onBlast(m); break;
     case 'finished':
       if (game) { const c = game.cars.get(m.id); if (c) c.fin = m.ft; if (m.id === myId) game.me.fin = m.ft; }
       break;
@@ -288,7 +289,7 @@ function startGame(m) {
   game = {
     world, track, scene, laps: m.laps, cars, me, boxes,
     goAt: performance.now() + m.delay, lastBeep: 4,
-    objs: new Map(), parts: new Particles(scene), skids: new Skids(scene),
+    objs: new Map(), parts: new Particles(scene), skids: new Skids(scene), rings: [], warn: false,
     item: null, itemFlash: 0, pending: false, lastSend: 0, firedLatch: false,
     lapShown: 1, lapBanner: 0, shake: 0, camYaw: me.a, camPos: null, fov: 64,
     prevU: 0, prevV: 0, stuckT: 0, lastReset: -1e9, resetLatch: false, roll: 0, pitch: 0, dmg: 0, wrongWay: 0, mySkid: null, sentFinish: false,
@@ -304,6 +305,7 @@ function endGame() {
   for (const c of game.cars.values()) s.remove(c.mesh.root);
   for (const b of game.boxes) s.remove(b.mesh);
   for (const o of game.objs.values()) s.remove(o.mesh);
+  for (const rg of game.rings) s.remove(rg.m);
   for (const p of game.parts.pool) s.remove(p.s);
   s.remove(game.skids.mesh);
   game = null;
@@ -320,9 +322,12 @@ function onSnap(m) {
 }
 
 function spawnObj(o) {
-  const mesh = o.kind === 'rocket' ? makeRocketMesh() : makeOilMesh();
-  mesh.position.set(o.x, o.kind === 'rocket' ? 10 : 0.35, o.y);
-  if (o.kind === 'rocket') { mesh.rotation.y = -Math.atan2(o.vy, o.vx); Snd.whoosh(); } else Snd.splat();
+  const flying = o.kind === 'rocket' || o.kind === 'homing';
+  const mesh = o.kind === 'rocket' ? makeRocketMesh() : o.kind === 'homing' ? makeHomingMesh() : o.kind === 'mine' ? makeMineMesh() : makeOilMesh();
+  mesh.position.set(o.x, flying ? 10 : o.kind === 'mine' ? 0 : 0.35, o.y);
+  if (flying) { mesh.rotation.y = -Math.atan2(o.vy, o.vx); Snd.whoosh(); if (o.kind === 'homing') Snd.tone(1400, 0.12, 'square', 0.05); }
+  else if (o.kind === 'mine') Snd.tone(180, 0.15, 'square', 0.08, -60);
+  else Snd.splat();
   game.scene.add(mesh);
   game.objs.set(o.id, Object.assign({}, o, { born: performance.now(), mesh }));
 }
@@ -331,12 +336,34 @@ function removeObj(id) {
   if (o) { game.scene.remove(o.mesh); game.objs.delete(id); }
 }
 
-function explode(x, y) {
+// expanding ground ring (shockwave)
+function ring(x, y, r, color) {
+  const m = new THREE.Mesh(new THREE.RingGeometry(0.85, 1, 48).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+  m.position.set(x, 3, y); m.scale.setScalar(10);
+  game.scene.add(m);
+  game.rings.push({ m, r, t: 0 });
+}
+function onBlast(m) {
+  ring(m.x, m.y, m.r, 0x7fd4ff); ring(m.x, m.y, m.r * 0.7, 0xffffff);
+  for (let i = 0; i < 24; i++) {
+    const a = (i / 24) * 6.283;
+    game.parts.emit(m.x, 6, m.y, { vx: Math.cos(a) * 520, vz: Math.sin(a) * 520, vy: 30, life: 0.5, size: 14, grow: 30, color: 0x9fe2ff, add: true, alpha: 0.8, drag: 3 });
+  }
+  const me = game.me, d = Math.hypot(me.x - m.x, me.y - m.y);
+  if (d < 1200) { Snd.boom(); Snd.tone(90, 0.6, 'sine', 0.2, -40); game.shake = Math.max(game.shake, 0.6 * (1 - d / 1200)); }
+  if (m.owner !== myId && d < m.r && me.spin <= 0) {
+    const res = S.applyHit(me, 'shockwave');
+    if (res === 'hit') { game.item = null; game.popup = { text: 'SHOCKWAVE!', sub: '', color: '#7fd4ff', t: 1.2 }; }
+    else if (res === 'shield') Snd.tone(300, 0.25, 'sine', 0.1);
+  }
+}
+function explode(x, y, big = 1) {
   const P = game.parts;
-  for (let i = 0; i < 18; i++) {
+  for (let i = 0; i < 18 * big; i++) {
     const a = Math.random() * 6.283, v = 40 + Math.random() * 140;
     P.emit(x, 8 + Math.random() * 10, y, { vx: Math.cos(a) * v, vz: Math.sin(a) * v, vy: 40 + Math.random() * 80, life: 0.5 + Math.random() * 0.3,
-      size: 14, grow: 30, color: i % 3 ? 0xffa030 : 0xffe080, add: true, alpha: 0.9, drag: 3 });
+      size: 14 * big, grow: 30 * big, color: i % 3 ? 0xffa030 : 0xffe080, add: true, alpha: 0.9, drag: 3 });
   }
   for (let i = 0; i < 10; i++) {
     P.emit(x + (Math.random() - .5) * 20, 10, y + (Math.random() - .5) * 20, { vy: 30 + Math.random() * 30, life: 1.6, size: 20, grow: 50, color: 0x333333, alpha: 0.55, drag: 1 });
@@ -359,6 +386,7 @@ function useItem() {
   const k = g.item; g.item = null;
   if (k === 'boost') { me.boost = 1.8; Snd.tone(200, 0.5, 'sawtooth', 0.05, 500); }
   else if (k === 'shield') { me.shield = 6; Snd.tone(600, 0.3, 'sine', 0.08, 400); }
+  else if (k === 'mega') { me.boost = 3.2; me.mega = 3.2; Snd.tone(120, 1.2, 'sawtooth', 0.07, 400); Snd.cheer(); g.popup = { text: 'MEGA TURBO!', sub: 'unstoppable', color: '#ff8a2a', t: 1.4 }; }
   else send({ t: 'use', kind: k });
 }
 
@@ -503,25 +531,35 @@ function update(dt, now) {
   }
 
   // projectiles / hazards
+  g.warn = false;
   for (const o of g.objs.values()) {
     const age = (now - o.born) / 1000;
     if (age > o.life) { removeObj(o.id); continue; }
-    o.x += o.vx * dt; o.y += o.vy * dt;
+    const tgt = o.target ? (o.target === myId ? me : g.cars.get(o.target)) : null;
+    S.stepProjectile(o, dt, tgt, age);
     o.mesh.position.x = o.x; o.mesh.position.z = o.y;
-    if (o.kind === 'rocket') g.parts.emit(o.x, 10, o.y, { vy: 6, life: 0.7, size: 6, grow: 22, color: 0xcfcfcf, alpha: 0.45, drag: 2 });
-    if (me.spin > 0) continue;
-    if (o.owner === myId && (o.kind === 'rocket' || age < 1)) continue;
+    if (o.kind === 'homing') { o.mesh.rotation.y = -Math.atan2(o.vy, o.vx); if (o.target === myId) g.warn = true; }
+    if (o.kind === 'rocket' || o.kind === 'homing') g.parts.emit(o.x, 10, o.y, { vy: 6, life: 0.7, size: 6, grow: 22, color: o.kind === 'homing' ? 0xffb0a0 : 0xcfcfcf, alpha: 0.45, drag: 2 });
+    if (o.kind === 'mine' && o.mesh.userData.light) o.mesh.userData.light.material.emissiveIntensity = age > S.PROJ.mineArm && Math.floor(now / 250) % 2 ? 4 : 0.2;
+    if (me.spin > 0 || !S.canHit(o, myId, age)) continue;
     if (Math.hypot(o.x - me.x, o.y - me.y) < 30) {
       removeObj(o.id);
       send({ t: 'hit', oid: o.id, x: o.x, y: o.y });
-      if (me.shield > 0) { me.shield = 0; Snd.tone(300, 0.25, 'sine', 0.1); }
-      else {
-        me.spin = 1.2; me.vx *= 0.45; me.vy *= 0.45; me.w = (Math.random() < 0.5 ? -1 : 1) * 8; g.item = null;
-        if (o.kind === 'oil') Snd.burst(0.6, 1200, 'bandpass', 0.2, 6);
-      }
-      explode(o.x, o.y);
+      const res = S.applyHit(me, o.kind);
+      if (res === 'shield') Snd.tone(300, 0.25, 'sine', 0.1);
+      else if (res === 'hit') { g.item = null; if (o.kind === 'oil') Snd.burst(0.6, 1200, 'bandpass', 0.2, 6); }
+      explode(o.x, o.y, o.kind === 'mine' ? 1.6 : 1);
     }
   }
+
+  for (const rg of g.rings) {
+    rg.t += dt; const k = Math.min(1, rg.t / 0.55);
+    rg.m.scale.setScalar(10 + (rg.r - 10) * (1 - (1 - k) * (1 - k)));
+    rg.m.material.opacity = 0.9 * (1 - k);
+    if (k >= 1) g.scene.remove(rg.m);
+  }
+  g.rings = g.rings.filter(rg => rg.t < 0.55);
+  if (g.warn) { g.warnT = (g.warnT || 0) - dt; if (g.warnT <= 0) { Snd.tone(1700, 0.08, 'square', 0.05); g.warnT = 0.35; } }
 
   // my car effects
   const spd = Math.hypot(me.vx, me.vy);
@@ -555,7 +593,7 @@ function update(dt, now) {
     g.lastSend = now;
     send({ t: 'state', x: +me.x.toFixed(1), y: +me.y.toFixed(1), a: +me.a.toFixed(3), sp: Math.round(me.sp),
       vx: Math.round(me.vx), vy: Math.round(me.vy), z: Math.round(me.z), st: +me.steer.toFixed(2), br: me.braking ? 1 : 0,
-      gh: me.ghost > 0 ? 1 : 0, total: Math.round(me.total), spin: +me.spin.toFixed(2), boost: +me.boost.toFixed(2), shield: +me.shield.toFixed(2) });
+      gh: me.ghost > 0 ? 1 : 0, total: Math.round(me.total), spin: +me.spin.toFixed(2), boost: +me.boost.toFixed(2), shield: +me.shield.toFixed(2), mega: +(me.mega || 0).toFixed(2) });
   }
 
   // audio
@@ -648,8 +686,8 @@ function renderAttract(dt) {
 }
 
 // ---------------- HUD ----------------
-const ITEM_ICON = { boost: '⚡', rocket: '🚀', oil: '🛢️', shield: '🛡️' };
-const ITEM_NAME = { boost: 'TURBO', rocket: 'ROCKET', oil: 'OIL SLICK', shield: 'SHIELD' };
+const ITEM_ICON = { boost: '⚡', rocket: '🚀', oil: '🛢️', shield: '🛡️', mine: '💣', triple: '🎆', homing: '🎯', shockwave: '💥', mega: '☄️' };
+const ITEM_NAME = { boost: 'TURBO', rocket: 'ROCKET', oil: 'OIL SLICK', shield: 'SHIELD', mine: 'MINE', triple: 'TRIPLE ROCKET', homing: 'HOMING', shockwave: 'SHOCKWAVE', mega: 'MEGA TURBO' };
 
 function drawHud(now) {
   const g = game, me = g.me, track = g.track;
@@ -731,6 +769,12 @@ function drawHud(now) {
     ctx.fillStyle = 'rgba(15,13,22,.8)'; ctx.beginPath(); ctx.roundRect(W / 2 - tw / 2, H * 0.88 - 20, tw, 40, 20); ctx.fill();
     ctx.fillStyle = "#ffc53d"; ctx.fillText(msg, W / 2, H * 0.88);
   }
+  if (g.warn && Math.floor(now / 220) % 2) {
+    ctx.font = '800 20px Inter,sans-serif';
+    const msg = '⚠ MISSILE INCOMING', tw = ctx.measureText(msg).width + 36;
+    ctx.fillStyle = 'rgba(200,20,20,.85)'; ctx.beginPath(); ctx.roundRect(W / 2 - tw / 2, H * 0.14 - 20, tw, 40, 20); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.fillText(msg, W / 2, H * 0.14);
+  }
   if (g.popup) {
     const a = Math.min(1, g.popup.t * 2), sc = 1 + Math.max(0, g.popup.t - 1.2) * 0.8;
     ctx.save(); ctx.globalAlpha = a; ctx.translate(W / 2, H * 0.22); ctx.scale(sc, sc);
@@ -764,9 +808,9 @@ function frame(now) {
     const me = game.me;
     me.mesh.root.visible = !(me.ghost > 0 && Math.floor(now / 90) % 2);
     poseCar(me.mesh, { x: me.x, y: me.y, z: me.z, a: me.a, sp: me.sp, steer: me.steer, roll: game.roll, pitch: game.pitch,
-      braking: me.braking || inp('hand'), boost: me.boost > 0, shield: me.shield > 0 }, dt);
+      braking: me.braking || inp('hand'), boost: me.boost > 0, shield: me.shield > 0, mega: me.mega > 0 }, dt);
     for (const c of game.cars.values()) {
-      poseCar(c.mesh, { x: c.x, y: c.y, z: c.z, a: c.a, sp: c.sp, steer: c.st, roll: c.roll, pitch: Math.max(-0.3, Math.min(0.3, ((c.tz || 0) - c.z) * 0.05)), braking: c.f & 8, boost: c.f & 2, shield: c.f & 4 }, dt);
+      poseCar(c.mesh, { x: c.x, y: c.y, z: c.z, a: c.a, sp: c.sp, steer: c.st, roll: c.roll, pitch: Math.max(-0.3, Math.min(0.3, ((c.tz || 0) - c.z) * 0.05)), braking: c.f & 8, boost: c.f & 2, shield: c.f & 4, mega: c.f & 32 }, dt);
     }
     updateCamera(dt);
     game.world.update(dt, camera, now / 1000);
