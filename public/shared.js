@@ -38,6 +38,30 @@
   ];
 
   const ITEMS = ['boost', 'rocket', 'oil', 'shield'];
+
+  // Selectable cars. `mods` scale the physics; `stats` (1-5) are what the garage shows.
+  const BASE_MODS = { vmax: 1, engine: 1, grip: 1, rear: 1, offGrip: 1, offV: 1, dirtGrip: 1, dirtV: 1, mass: 1, air: 1, spin: 1 };
+  const CARS = {
+    gt:     { name: 'GT Coupe',    blurb: 'Balanced all-rounder.',
+              stats: { speed: 4, accel: 3, grip: 4, offroad: 2, weight: 3 }, mods: {} },
+    muscle: { name: 'Muscle',      blurb: 'Huge top speed, loose rear end.',
+              stats: { speed: 5, accel: 4, grip: 2, offroad: 2, weight: 4 },
+              mods: { vmax: 1.06, engine: 1.1, grip: 0.93, rear: 0.92, mass: 1.25 } },
+    rally:  { name: 'Rally Hatch', blurb: 'Sticky, nimble and at home on dirt.',
+              stats: { speed: 3, accel: 4, grip: 4, offroad: 5, weight: 2 },
+              mods: { vmax: 0.96, engine: 1.06, grip: 1.03, offGrip: 1.3, offV: 1.2, dirtGrip: 1.22, dirtV: 1.12, mass: 0.9 } },
+    truck:  { name: 'Trail Truck', blurb: 'Heavy bruiser. Shoves others, shrugs off hits.',
+              stats: { speed: 3, accel: 2, grip: 2, offroad: 5, weight: 5 },
+              mods: { vmax: 0.96, engine: 0.96, grip: 0.92, offGrip: 1.4, offV: 1.3, dirtGrip: 1.2, dirtV: 1.1, mass: 1.7, spin: 0.6 } },
+    proto:  { name: 'Prototype',   blurb: 'Tarmac missile. Hates the dirt.',
+              stats: { speed: 5, accel: 3, grip: 5, offroad: 1, weight: 2 },
+              mods: { vmax: 1.05, engine: 1.02, grip: 1.1, offGrip: 0.75, offV: 0.8, dirtGrip: 0.82, dirtV: 0.88, mass: 0.9, spin: 1.15 } },
+    buggy:  { name: 'Dune Buggy',  blurb: 'Featherweight. Best off-road and in the air.',
+              stats: { speed: 2, accel: 5, grip: 3, offroad: 5, weight: 1 },
+              mods: { vmax: 0.93, engine: 1.16, grip: 0.98, offGrip: 1.45, offV: 1.35, dirtGrip: 1.3, dirtV: 1.16, mass: 0.7, air: 1.35, spin: 1.1 } },
+  };
+  for (const k in CARS) CARS[k].mods = Object.assign({}, BASE_MODS, CARS[k].mods);
+  const carMods = c => (c && c.mods) || BASE_MODS;
   const BOX_RESPAWN_MS = 4000;
   const CAR_HALF_W = 13;
 
@@ -201,7 +225,7 @@
       const dx = b.x - a.x, dy = b.y - a.y, l = Math.hypot(dx, dy) || 1;
       q.dx = dx / l; q.dy = dy / l; q.nx = -dy / l; q.ny = dx / l; q.ang = Math.atan2(q.dy, q.dx);
       q.s = (s1 + (span * k) / (n - 1)) % t.len;
-      q.wp = q.wn = half + 42;
+      q.wp = q.wn = half + 42; q.dirt = true;
     }
     for (let k = 0; k < n; k++) {
       const a = pts[Math.max(0, k - 4)], b = pts[Math.min(n - 1, k + 4)];
@@ -342,7 +366,7 @@
   // Airborne: no tyre forces. Steering spins the car (tricks), throttle just revs the engine.
   function airStep(c, inp, h, track, steerT, thr) {
     c.airT += h;
-    const target = c.spin > 0 ? c.w : steerT * 7.5;
+    const target = c.spin > 0 ? c.w : steerT * 7.5 * carMods(c).air;
     c.w += clamp(target - c.w, -32 * h, 32 * h);
     c.airRot += c.w * h;
     c.a = wrapAngle(c.a + c.w * h);
@@ -464,12 +488,13 @@
     let v = -c.vx * fy + c.vy * fx;
     let w = c.w;
 
-    if (c.off) gs *= PHYS.offGrip;
-    else if (c.surf === 'dirt') gs *= DIRT.grip;
+    const M = carMods(c);
+    if (c.off) gs *= PHYS.offGrip * M.offGrip;
+    else if (c.surf === 'dirt') gs *= DIRT.grip * M.dirtGrip;
 
-    let vmax = (boosting ? PHYS.boostV : PHYS.vmax) * capMul;
-    if (c.off) vmax = Math.min(vmax, PHYS.offV * (boosting ? 1.4 : 1));
-    else if (c.surf === 'dirt') vmax = Math.min(vmax, DIRT.vmax * (boosting ? 1.3 : 1));
+    let vmax = (boosting ? PHYS.boostV : PHYS.vmax) * capMul * M.vmax;
+    if (c.off) vmax = Math.min(vmax, PHYS.offV * M.offV * (boosting ? 1.4 : 1));
+    else if (c.surf === 'dirt') vmax = Math.min(vmax, DIRT.vmax * M.dirtV * (boosting ? 1.3 : 1));
 
     // gearbox (cosmetic + brief torque cut on upshift)
     const G = PHYS.gears, au = Math.abs(u);
@@ -486,7 +511,7 @@
     if (thr) {
       if (u > -15) {
         const t = clamp(1 - Math.pow(Math.max(0, u) / vmax, 3), 0, 1);
-        drive = (PHYS.engine * (1.15 - 0.05 * g) * t + (boosting ? PHYS.boostA : 0)) * (c.shiftT > 0 ? 0.35 : 1);
+        drive = (PHYS.engine * M.engine * (1.15 - 0.05 * g) * t + (boosting ? PHYS.boostA : 0)) * (c.shiftT > 0 ? 0.35 : 1);
         if (u > vmax) drive = -PHYS.offRoll * 0.8;
       } else drive = PHYS.brake;
     }
@@ -504,8 +529,8 @@
     // tyre forces with friction circle on rear (driven) axle
     const speedSteer = PHYS.maxSteer / (1 + Math.abs(u) / PHYS.steerFade);
     const delta = c.steer * speedSteer;
-    const gF = PHYS.gripF * gs;
-    let gR = PHYS.gripR * gs * (hand ? PHYS.hand : 1);
+    const gF = PHYS.gripF * gs * M.grip;
+    let gR = PHYS.gripR * gs * M.grip * M.rear * (hand ? PHYS.hand : 1);
     const used = Math.min(Math.abs(drive) * PHYS.tcUse, gR * 0.98);
     const gRlat = Math.sqrt(Math.max(0, gR * gR - used * used));
     const uu = Math.max(Math.abs(u), 45), su = u < 0 ? -1 : 1;
@@ -563,7 +588,7 @@
   // Advance one car. inp = {up, down, left, right, hand} or {up, down, steer:-1..1, hand}
   function stepCar(c, inp, dt, track, capMul) {
     capMul = capMul || 1;
-    if (c.spin > 0 && c.spin0 === undefined) { c.spin0 = c.a; c.spinDir = Math.sign(c.w || 1); c.spinDur = c.spin; }
+    if (c.spin > 0 && c.spin0 === undefined) { c.spin *= carMods(c).spin; c.spin0 = c.a; c.spinDir = Math.sign(c.w || 1); c.spinDur = c.spin; }
     if (c.spin > 0) c.spin -= dt;
     if (c.wallT > 0) c.wallT -= dt;
     if (c.ghost > 0) c.ghost -= dt;
@@ -612,14 +637,16 @@
     if (moveB) { b.x += nx * pen * share; b.y += ny * pen * share; }
     const rel = (b.vx - a.vx) * nx + (b.vy - a.vy) * ny;
     if (rel >= 0) return 0;
-    const j = (-(1 + 0.35) * rel) / 2;
+    const ma = carMods(a).mass, mb = carMods(b).mass;
+    const j = -(1 + 0.35) * rel;
+    const ja = (j * mb) / (ma + mb), jb = (j * ma) / (ma + mb); // heavier car moves less
     // contact point offset along each car's heading gives a yaw kick
     const kick = (car, sgn) => {
       const side = Math.cos(car.a) * ny - Math.sin(car.a) * nx;
-      car.w = (car.w || 0) + sgn * side * j * 0.004;
+      car.w = (car.w || 0) + sgn * side * j * 0.002;
     };
-    if (moveA) { a.vx -= nx * j; a.vy -= ny * j; kick(a, -1); a.crash = Math.max(a.crash || 0, -rel); }
-    if (moveB) { b.vx += nx * j; b.vy += ny * j; kick(b, 1); b.crash = Math.max(b.crash || 0, -rel); }
+    if (moveA) { a.vx -= nx * ja; a.vy -= ny * ja; kick(a, -1); a.crash = Math.max(a.crash || 0, -rel); }
+    if (moveB) { b.vx += nx * jb; b.vy += ny * jb; kick(b, 1); b.crash = Math.max(b.crash || 0, -rel); }
     return -rel;
   }
 
@@ -698,7 +725,8 @@
     for (let o = 0; o * track.step < bd + 60; o += 2) {
       const dist = o * track.step;
       const q = walk(track, c, dist);
-      const qv = q.vmax * skill;
+      const M = carMods(c), gripK = Math.sqrt(M.grip * (q.dirt ? M.dirtGrip : 1));
+      const qv = Math.min(q.vmax * skill * gripK, PHYS.vmax * M.vmax * skill);
       vt = Math.min(vt, Math.sqrt(qv * qv + 2 * PHYS.brake * 0.7 * Math.max(0, dist - 40)));
     }
     const lost = Math.abs(alpha) > 1.3;
@@ -720,7 +748,7 @@
     }
   }
 
-  return { TRACKS, ITEMS, PHYS, BOX_RESPAWN_MS, buildTrack, nearest, nearestOn, makeCar, stepCar, collide, resetCar,
+  return { TRACKS, ITEMS, CARS, PHYS, BOX_RESPAWN_MS, buildTrack, nearest, nearestOn, makeCar, stepCar, collide, resetCar,
     locate, envelope, groundAt, clearance, roadPoint,
     botInput, botRecover, wrapAngle };
 });

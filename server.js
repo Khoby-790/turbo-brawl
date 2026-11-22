@@ -62,7 +62,7 @@ function lobbyMsg(room) {
     t: 'lobby', code: room.code, hostId: room.hostId, phase: room.phase,
     track: room.trackIdx, laps: room.laps, bots: room.bots,
     tracks: S.TRACKS.map(t => t.name),
-    players: [...room.players.values()].map(p => ({ id: p.id, name: p.name, color: p.color })),
+    players: [...room.players.values()].map(p => ({ id: p.id, name: p.name, color: p.color, car: p.car })),
   };
 }
 function freeColor(room) {
@@ -79,13 +79,14 @@ function startRace(room) {
   const botColors = COLORS.filter(c => !usedColors.has(c));
   const entrants = [];
   for (let i = 0; i < botCount; i++) {
-    entrants.push({ id: 'b' + i, name: BOT_NAMES[i], color: botColors[i % botColors.length], bot: true });
+    const types = Object.keys(S.CARS);
+    entrants.push({ id: 'b' + i, name: BOT_NAMES[i], color: botColors[i % botColors.length], bot: true, car: types[Math.floor(Math.random() * types.length)] });
   }
-  for (const h of humans) entrants.push({ id: h.id, name: h.name, color: h.color, bot: false });
+  for (const h of humans) entrants.push({ id: h.id, name: h.name, color: h.color, bot: false, car: h.car });
 
   room.cars = new Map();
   entrants.forEach((e, slot) => {
-    const car = Object.assign(S.makeCar(track, slot), e, {
+    const car = Object.assign(S.makeCar(track, slot), e, { mods: S.CARS[e.car].mods }, {
       finished: false, ft: 0, item: null, itemAt: 0,
       lane: (Math.random() - 0.5) * track.width * 0.5, laneT: 0,
       skill: 0.86 + Math.random() * 0.1,
@@ -105,7 +106,7 @@ function startRace(room) {
   broadcast(room, lobbyMsg(room));
   broadcast(room, {
     t: 'start', track: room.trackIdx, laps: room.laps, delay: 3500,
-    cars: [...room.cars.values()].map(c => ({ id: c.id, name: c.name, color: c.color, bot: c.bot, x: c.x, y: c.y, a: c.a })),
+    cars: [...room.cars.values()].map(c => ({ id: c.id, name: c.name, color: c.color, bot: c.bot, car: c.car, x: c.x, y: c.y, a: c.a })),
   });
 }
 
@@ -267,7 +268,7 @@ wss.on('connection', ws => {
       }
       room = rooms.get(c);
       if (room.players.size >= MAX_CARS) { send(ws, { t: 'error', msg: 'That room is full.' }); room = null; return; }
-      me = { id: 'p' + nextId++, ws, name, color: freeColor(room) };
+      me = { id: 'p' + nextId++, ws, name, color: freeColor(room), car: S.CARS[m.car] ? m.car : 'gt' };
       room.players.set(me.id, me);
       if (!room.hostId) room.hostId = me.id;
       send(ws, { t: 'welcome', id: me.id, code: room.code });
@@ -285,6 +286,9 @@ wss.on('connection', ws => {
         if (Number.isInteger(m.laps)) room.laps = Math.max(1, Math.min(9, m.laps));
         if (Number.isInteger(m.bots)) room.bots = Math.max(0, Math.min(7, m.bots));
         broadcast(room, lobbyMsg(room));
+        break;
+      case 'car':
+        if (S.CARS[m.car] && room.phase !== 'racing') { me.car = m.car; broadcast(room, lobbyMsg(room)); }
         break;
       case 'start':
         if (isHost && room.phase === 'lobby') startRace(room);

@@ -9,6 +9,8 @@ power-up boxes (Turbo, Rocket, Oil Slick, Shield), 3 tracks, lobby chat, and tou
 - Normal-mapped asphalt, concrete and ground; swaying grass, varied trees, reflective harbour water
 - Graphics setting (Low / Medium / High / Ultra) on the start screen; phones default to Low
 - Tyre-model physics: grip limits, power oversteer, handbrake drifts, gears, walls and car-to-car impacts
+- Six cars to choose from in the garage, each with its own handling: GT Coupe, Muscle, Rally Hatch,
+  Trail Truck, Prototype and Dune Buggy (stat bars + a 3D showroom in the lobby)
 - Stunt jumps: kicker ramps send you flying; spin in the air for 360s and land straight to earn turbo
 - Shortcuts: narrow dirt cut-throughs behind "SHORTCUT" arches - shorter, but less grip and a jump of their own on some tracks
 - Skid marks, tyre smoke, sparks, explosions, body roll
@@ -35,6 +37,7 @@ Enter to chat, M to mute.
 - `server.js` - static file server + WebSocket rooms, CPU drivers, items, results
 - `public/shared.js` - tracks, car physics and CPU driving (shared by server and browser)
 - `public/world.js` - 3D scene: terrain, road, walls, scenery, car models, particles, skid marks
+- `public/cars.js` - the six car models
 - `public/gfx.js` - quality presets, post-processing chain, sky, clouds, lens flare
 - `public/audio.js` - procedural sound engine
 - `public/game.js` - game loop, input, networking, camera, HUD

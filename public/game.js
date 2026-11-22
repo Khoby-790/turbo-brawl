@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { Snd } from './audio.js';
 import { Q, QNAME, makeComposer, saveQuality } from './gfx.js';
-import { buildWorld, makeCarMesh, poseCar, makeBoxMesh, makeRocketMesh, makeOilMesh, Particles, Skids, isTouch } from './world.js';
+import { makeCarMesh, poseCar, CAR_TYPES } from './cars.js';
+import { buildWorld, makeBoxMesh, makeRocketMesh, makeOilMesh, Particles, Skids, isTouch } from './world.js';
 
 const S = window.Shared;
 const $ = id => document.getElementById(id);
@@ -101,12 +102,37 @@ const urlRoom = new URLSearchParams(location.search).get('r');
 if (urlRoom) $('roomCode').value = urlRoom.toUpperCase();
 try { camMode = +localStorage.getItem('tb_cam') || 0; } catch {}
 
+let myCar = (() => { try { const c = localStorage.getItem('tb_car'); return S.CARS[c] ? c : 'gt'; } catch { return 'gt'; } })();
+const STAT_NAMES = { speed: 'Speed', accel: 'Accel', grip: 'Grip', offroad: 'Off-road', weight: 'Weight' };
+function renderCars() {
+  const grid = $('carGrid'); grid.innerHTML = '';
+  for (const type of CAR_TYPES) {
+    const b = document.createElement('button');
+    b.textContent = S.CARS[type].name; b.className = type === myCar ? 'sel' : '';
+    b.onclick = () => {
+      myCar = type; try { localStorage.setItem('tb_car', type); } catch {}
+      send({ t: 'car', car: type }); renderCars(); Snd.tone(660, 0.06, 'triangle', 0.05);
+    };
+    grid.append(b);
+  }
+  const C = S.CARS[myCar], info = $('carInfo'); info.innerHTML = '';
+  const bl = document.createElement('div'); bl.className = 'blurb'; bl.textContent = C.blurb; info.append(bl);
+  for (const k in STAT_NAMES) {
+    const row = document.createElement('div'); row.className = 'stat';
+    const lab = document.createElement('span'); lab.textContent = STAT_NAMES[k];
+    const bar = document.createElement('div'); bar.className = 'bar';
+    for (let i = 1; i <= 5; i++) { const seg = document.createElement('i'); if (i <= C.stats[k]) seg.className = 'on'; bar.append(seg); }
+    row.append(lab, bar); info.append(row);
+  }
+}
+renderCars();
+
 function join(room) {
   const name = $('name').value.trim() || 'Racer' + Math.floor(Math.random() * 90 + 10);
   try { localStorage.setItem('tb_name', name); } catch {}
   Snd.init();
   $('menuErr').textContent = '';
-  connect(() => send({ t: 'join', name, room }));
+  connect(() => send({ t: 'join', name, room, car: myCar }));
 }
 $('gfxSel').value = QNAME;
 $('gfxSel').onchange = () => { saveQuality($('gfxSel').value); location.reload(); };
@@ -145,7 +171,8 @@ function renderLobby() {
     const li = document.createElement('li');
     const dot = document.createElement('span'); dot.className = 'dot'; dot.style.background = p.color;
     const nm = document.createElement('span'); nm.textContent = p.name + (p.id === myId ? ' (you)' : '');
-    li.append(dot, nm);
+    const cn = document.createElement('span'); cn.className = 'carname'; cn.textContent = S.CARS[p.car] ? S.CARS[p.car].name : '';
+    li.append(dot, nm, cn);
     if (p.id === L.hostId) { const t = document.createElement('span'); t.className = 'tag'; t.textContent = 'HOST'; li.append(t); }
     ul.append(li);
   }
@@ -236,18 +263,19 @@ function getMini(idx) {
 // ---------------- game lifecycle ----------------
 function startGame(m) {
   endGame();
+  clearShowroom();
   const world = getWorld(m.track), track = world.track;
   const scene = world.scene;
   const cars = new Map();
   let me = null;
   m.cars.forEach((c, slot) => {
     if (c.id === myId) {
-      me = Object.assign(S.makeCar(track, slot), { id: c.id, name: c.name, color: c.color, fin: 0 });
-      me.mesh = makeCarMesh(c.color, null);
+      me = Object.assign(S.makeCar(track, slot), { id: c.id, name: c.name, color: c.color, fin: 0, car: c.car, mods: (S.CARS[c.car] || S.CARS.gt).mods });
+      me.mesh = makeCarMesh(c.color, null, c.car);
       scene.add(me.mesh.root);
     } else {
       const rc = { id: c.id, name: c.name, color: c.color, bot: c.bot, x: c.x, y: c.y, a: c.a, tx: c.x, ty: c.y, ta: c.a,
-        sp: 0, total: 0, f: 0, fin: 0, st: 0, vx: 0, vy: 0, z: 0, tz: 0, road: 0, mi: undefined, ni: 0, px: c.x, py: c.y, roll: 0, mesh: makeCarMesh(c.color, c.name), skid: null, smoke: 0 };
+        sp: 0, total: 0, f: 0, fin: 0, st: 0, vx: 0, vy: 0, z: 0, tz: 0, road: 0, mi: undefined, ni: 0, px: c.x, py: c.y, roll: 0, mesh: makeCarMesh(c.color, c.name, c.car), mods: (S.CARS[c.car] || S.CARS.gt).mods, skid: null, smoke: 0 };
       scene.add(rc.mesh.root);
       cars.set(c.id, rc);
     }
@@ -576,7 +604,37 @@ function updateCamera(dt) {
 
 // attract mode: a camera drone flies along the current lobby track
 const attract = { t: 0 };
+// garage showroom: in the lobby, orbit the selected car parked behind the start line
+const showroom = { mesh: null, key: '', scene: null };
+function clearShowroom() {
+  if (showroom.mesh) showroom.scene.remove(showroom.mesh.root);
+  showroom.mesh = null; showroom.key = '';
+  camera.clearViewOffset();
+}
+function renderShowroom(dt) {
+  attract.t += dt;
+  const w = getWorld(lobby.track), track = w.track;
+  const mine = lobby.players.find(p => p.id === myId);
+  const color = mine ? mine.color : '#e6372e', key = myCar + color + lobby.track;
+  if (showroom.key !== key) {
+    clearShowroom();
+    showroom.mesh = makeCarMesh(color, null, myCar); showroom.scene = w.scene; showroom.key = key;
+    w.scene.add(showroom.mesh.root);
+  }
+  const p = track.pts[(track.N - 4) % track.N];
+  poseCar(showroom.mesh, { x: p.x, y: p.y, z: 0, a: p.ang, sp: 0, steer: Math.sin(attract.t * 0.6) * 0.7 }, dt);
+  const ang = p.ang + attract.t * 0.28;
+  camera.position.set(p.x + Math.cos(ang) * 95, 30, p.y + Math.sin(ang) * 95);
+  camera.lookAt(p.x, 9, p.y);
+  camera.fov = 42; camera.updateProjectionMatrix();
+  if (W > 900) camera.setViewOffset(W, H, -W * 0.2, 0, W, H); else camera.clearViewOffset();
+  w.sun.position.set(p.x + w.sunOff.x, w.sunOff.y, p.y + w.sunOff.z); w.sun.target.position.set(p.x, 0, p.y);
+  w.update(dt, camera, attract.t);
+  render(w.scene, 0, performance.now());
+}
 function renderAttract(dt) {
+  if (lobby && !$('lobby').classList.contains('hidden') && lobby.phase !== 'racing') return renderShowroom(dt);
+  if (showroom.mesh) clearShowroom();
   attract.t += dt;
   const idx = lobby ? lobby.track : 0, w = getWorld(idx), track = w.track;
   const k = Math.floor((attract.t * 9) % track.N), p = track.pts[k], q = track.pts[(k + 25) % track.N];

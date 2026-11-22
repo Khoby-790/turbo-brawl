@@ -39,6 +39,15 @@
   .share button { width:auto; padding:9px 12px; font-size:13px; }
   .note { font-size:13px; color:var(--muted); margin-top:12px; }
   .err { color:#ff6b6b; font-size:14px; margin-top:10px; min-height:1em; }
+  .cars { display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
+  .cars button { padding:9px 6px; font-size:13px; background:#0d0c14; color:var(--ink); border:1px solid var(--line); box-shadow:none; font-weight:700; }
+  .cars button.sel { border-color:var(--hot); background:rgba(255,90,31,.16); color:var(--hot2); }
+  .carinfo { margin-top:10px; padding:10px 12px; background:#0d0c14; border:1px solid var(--line); border-radius:10px; font-size:13px; }
+  .carinfo .blurb { color:var(--muted); margin-bottom:8px; }
+  .stat { display:grid; grid-template-columns:70px 1fr; align-items:center; gap:8px; margin-top:4px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); }
+  .bar { display:flex; gap:3px; } .bar i { flex:1; height:7px; border-radius:2px; background:rgba(255,255,255,.1); } .bar i.on { background:linear-gradient(90deg,var(--hot2),var(--hot)); }
+  .carname { color:var(--muted); font-size:12px; margin-left:6px; }
+  @media (min-width: 900px) { #lobby { justify-content:flex-start; padding-left:6vw; } }
   .grid3 { display:grid; grid-template-columns:2fr 1fr 1fr; gap:10px; }
   table { width:100%; border-collapse:collapse; margin-bottom:16px; }
   td { padding:8px 6px; border-bottom:1px solid var(--line); }
@@ -96,6 +105,9 @@
     <div class="share"><span class="code" id="lobbyCode">----</span><button class="ghost" id="copyBtn">Copy invite link</button></div>
     <label>Drivers</label>
     <ul class="players" id="playerList"></ul>
+    <label>Your car</label>
+    <div class="cars" id="carGrid"></div>
+    <div class="carinfo" id="carInfo"></div>
     <div class="grid3">
       <div><label for="trackSel">Track</label><select id="trackSel"></select></div>
       <div><label for="lapSel">Laps</label><select id="lapSel"></select></div>
