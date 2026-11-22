@@ -11,12 +11,48 @@ const ADDONS = path.join(__dirname, 'node_modules', 'three', 'examples', 'jsm');
 const MAX_CARS = 8;
 const COLORS = ['#e6372e', '#2f7de1', '#f2c12e', '#35b04a', '#a24de0', '#ff8a1f', '#1fc8c8', '#ff4fa3'];
 const BOT_NAMES = ['Blaze', 'Nitro', 'Dusty', 'Vroom', 'Sparky', 'Crusher', 'Zippy', 'Torque'];
+// ---------- leaderboard (best lap per driver per track, saved to disk) ----------
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const BOARD_FILE = path.join(DATA_DIR, 'leaderboard.json');
+const BOARD_SIZE = 10;
+let board = {};
+try { board = JSON.parse(fs.readFileSync(BOARD_FILE, 'utf8')) || {}; } catch { board = {}; }
+let saveTimer = null;
+function saveBoard() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    fs.mkdir(DATA_DIR, { recursive: true }, () => {
+      const tmp = BOARD_FILE + '.tmp';
+      fs.writeFile(tmp, JSON.stringify(board), err => { if (!err) fs.rename(tmp, BOARD_FILE, () => {}); else console.error('leaderboard save failed', err.message); });
+    });
+  }, 1000);
+}
+// Returns the driver's rank on the board (1-based) if the lap made it, else 0.
+function submitLap(trackName, name, car, ms) {
+  const list = board[trackName] || (board[trackName] = []);
+  const key = name.toLowerCase();
+  const prev = list.find(e => e.name.toLowerCase() === key);
+  if (prev && prev.ms <= ms) return 0;
+  const next = list.filter(e => e.name.toLowerCase() !== key);
+  next.push({ name, car, ms, at: Date.now() });
+  next.sort((a, b) => a.ms - b.ms);
+  board[trackName] = next.slice(0, BOARD_SIZE);
+  const rank = board[trackName].findIndex(e => e.name.toLowerCase() === key) + 1;
+  if (rank) saveBoard();
+  return rank;
+}
+const trackRecord = name => (board[name] && board[name][0]) || null;
+
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
 
 // ---------- static file server ----------
 const server = http.createServer((req, res) => {
   let url = decodeURIComponent(req.url.split('?')[0]);
   if (url === '/') url = '/index.html';
+  if (url === '/api/leaderboard') {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    return res.end(JSON.stringify({ tracks: S.TRACKS.map(t => t.name), board }));
+  }
   if (url.startsWith('/vendor/addons/')) {
     const file = path.normalize(path.join(ADDONS, url.slice('/vendor/addons/'.length)));
     if (!file.startsWith(ADDONS + path.sep) || !file.endsWith('.js')) { res.writeHead(403); return res.end(); }
@@ -62,6 +98,7 @@ function lobbyMsg(room) {
     t: 'lobby', code: room.code, hostId: room.hostId, phase: room.phase,
     track: room.trackIdx, laps: room.laps, bots: room.bots,
     tracks: S.TRACKS.map(t => t.name),
+    record: trackRecord(S.TRACKS[room.trackIdx].name),
     players: [...room.players.values()].map(p => ({ id: p.id, name: p.name, color: p.color, car: p.car })),
   };
 }
@@ -189,7 +226,7 @@ function endRace(room) {
   const dnf = cars.filter(c => !c.finished).sort((a, b) => b.total - a.total);
   broadcast(room, {
     t: 'results',
-    list: [...fin, ...dnf].map(c => ({ id: c.id, name: c.name, color: c.color, bot: c.bot, time: c.finished ? c.ft : null })),
+    list: [...fin, ...dnf].map(c => ({ id: c.id, name: c.name, color: c.color, bot: c.bot, car: c.car, time: c.finished ? c.ft : null, best: c.bestLap || null })),
   });
   broadcast(room, lobbyMsg(room));
 }
@@ -202,11 +239,31 @@ function finishCar(room, car) {
   broadcast(room, { t: 'finished', id: car.id, ft: car.ft });
 }
 
+// Lap timing on the server clock. Lap 1 starts when a car first crosses the start line.
+const MIN_LAP_SPEED = 1150; // px/s: no lap can be faster than this average (anti-cheat)
+function timeLaps(room, c, now) {
+  const track = room.track, idx = Math.floor(c.total / track.len);
+  if (c.lapIdx === undefined) { c.lapIdx = idx; c.lapStart = null; return; }
+  if (idx <= c.lapIdx) return;
+  if (idx === c.lapIdx + 1 && c.lapStart && idx <= room.laps) {
+    const ms = now - c.lapStart;
+    if (ms >= (track.len / MIN_LAP_SPEED) * 1000) {
+      const pb = !c.bestLap || ms < c.bestLap;
+      if (pb) c.bestLap = ms;
+      const rank = c.bot ? 0 : submitLap(track.name, c.name, c.car, ms);
+      broadcast(room, { t: 'lap', id: c.id, lap: idx, ms, pb, rank, record: rank === 1 });
+      if (rank) broadcast(room, lobbyMsg(room));
+    }
+  }
+  c.lapIdx = idx; c.lapStart = now;
+}
+
 function tickRoom(room) {
   if (room.phase !== 'racing') return;
   const now = Date.now(), dt = 1 / 30, track = room.track;
   room.tickN++;
   const cars = [...room.cars.values()];
+  if (now >= room.startAt) for (const c of cars) timeLaps(room, c, now);
 
   if (now >= room.startAt) {
     // leader among humans, for gentle rubber-banding

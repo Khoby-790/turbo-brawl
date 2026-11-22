@@ -88,13 +88,14 @@ function handle(m) {
       if (game) { const c = game.cars.get(m.id); if (c) { game.world.scene.remove(c.mesh.root); game.cars.delete(m.id); } }
       break;
     case 'results': showResults(m.list); break;
+    case 'lap': onLap(m); break;
     case 'chat': addChat(m); break;
   }
 }
 
 // ---------------- UI ----------------
 function show(which) {
-  for (const id of ['menu', 'lobby', 'results']) $(id).classList.toggle('hidden', id !== which);
+  for (const id of ['menu', 'lobby', 'results', 'board']) $(id).classList.toggle('hidden', id !== which);
   $('chat').classList.toggle('hidden', which === 'menu');
   $('touch').classList.toggle('hidden', !(isTouch && which === null));
 }
@@ -183,6 +184,12 @@ function renderLobby() {
     : 'Waiting for the host to start the race…';
   $('againBtn').disabled = !host;
   $('resNote').textContent = host ? '' : 'Waiting for the host…';
+  const rec = L.record, lr = $('lobbyRecord'); lr.textContent = '';
+  if (rec) {
+    lr.append('Track record: ');
+    const b = document.createElement('b'); b.textContent = fmtTime(rec.ms); lr.append(b);
+    lr.append(` by ${rec.name}` + (S.CARS[rec.car] ? ` (${S.CARS[rec.car].name})` : ''));
+  } else lr.textContent = 'No lap record on this track yet. Set the first one!';
 }
 
 function fmtTime(ms) {
@@ -190,6 +197,52 @@ function fmtTime(ms) {
   const m = Math.floor(ms / 60000), s = (ms % 60000) / 1000;
   return m + ':' + s.toFixed(2).padStart(5, '0');
 }
+// ---------- leaderboard ----------
+let boardData = null, boardTrack = 0, boardReturn = 'menu';
+function openBoard() {
+  boardReturn = ['menu', 'lobby', 'results'].find(id => !$(id).classList.contains('hidden')) || 'menu';
+  if (lobby) boardTrack = lobby.track;
+  show('board');
+  $('boardNote').textContent = 'Loading…';
+  fetch('/api/leaderboard').then(r => r.json()).then(d => { boardData = d; renderBoard(); })
+    .catch(() => { $('boardNote').textContent = 'Could not load the leaderboard.'; });
+}
+function renderBoard() {
+  const tabs = $('boardTabs'); tabs.innerHTML = '';
+  boardData.tracks.forEach((name, i) => {
+    const b = document.createElement('button'); b.textContent = name; b.className = i === boardTrack ? 'sel' : '';
+    b.onclick = () => { boardTrack = i; renderBoard(); };
+    tabs.append(b);
+  });
+  const list = boardData.board[boardData.tracks[boardTrack]] || [], tb = $('boardTable'); tb.innerHTML = '';
+  list.forEach((e, i) => {
+    const tr = document.createElement('tr');
+    const p = document.createElement('td'); p.className = 'pos'; p.textContent = i === 0 ? '🏆' : i + 1;
+    const n = document.createElement('td'); n.textContent = e.name;
+    const c = document.createElement('td'); c.className = 'car'; c.textContent = S.CARS[e.car] ? S.CARS[e.car].name : '';
+    const t = document.createElement('td'); t.className = 'time'; t.textContent = fmtTime(e.ms);
+    tr.append(p, n, c, t); tb.append(tr);
+  });
+  $('boardNote').textContent = list.length ? 'Best lap per driver. Race to get on the board!' : 'No laps recorded on this track yet.';
+}
+document.querySelectorAll('.boardBtn').forEach(b => b.onclick = openBoard);
+$('boardClose').onclick = () => show(boardReturn);
+
+function onLap(m) {
+  if (!game) return;
+  if (m.id === myId) {
+    const g = game;
+    g.lastLap = m.ms;
+    if (m.pb) g.bestLap = m.ms;
+    if (m.record) { g.popup = { text: 'TRACK RECORD!', sub: fmtTime(m.ms), color: '#ffc53d', t: 2.4 }; Snd.cheer(); Snd.tone(784, 0.15, 'triangle', 0.08); Snd.tone(1175, 0.3, 'triangle', 0.08); }
+    else if (m.rank) { g.popup = { text: 'LEADERBOARD #' + m.rank, sub: fmtTime(m.ms), color: '#5ee07a', t: 2 }; Snd.tone(988, 0.2, 'triangle', 0.08); }
+    else if (m.pb && m.lap > 1) g.popup = { text: 'PERSONAL BEST', sub: fmtTime(m.ms), color: '#7fd4ff', t: 1.6 };
+  } else if (m.record) {
+    const c = game.cars.get(m.id);
+    if (c) addChat({ name: '🏆 ' + c.name, color: '#ffc53d', text: 'set a new track record: ' + fmtTime(m.ms) });
+  }
+}
+
 function showResults(list) {
   const tb = $('resTable'); tb.innerHTML = '';
   list.forEach((r, i) => {
@@ -200,7 +253,8 @@ function showResults(list) {
     n.append(dot, document.createTextNode(r.name + (r.bot ? ' (CPU)' : '') + (r.id === myId ? ' — you' : '')));
     if (r.id === myId) n.style.fontWeight = '800';
     const t = document.createElement('td'); t.className = 'time'; t.textContent = fmtTime(r.time);
-    tr.append(p, n, t); tb.append(tr);
+    const bl = document.createElement('td'); bl.className = 'time'; bl.textContent = r.best ? 'best ' + fmtTime(r.best) : '';
+    tr.append(p, n, t, bl); tb.append(tr);
   });
   if (lobby) renderLobby();
   show('results');
@@ -708,6 +762,19 @@ function drawHud(now) {
   ctx.fillText(me.fin ? 'FINISHED' : `LAP ${lap}/${g.laps}`, 28, 70);
   ctx.fillStyle = '#a8a3b5'; ctx.font = '600 14px Inter,sans-serif';
   ctx.fillText(fmtTime(me.fin || elapsed), 110, 71);
+  // lap timer: current / last / best (timed locally for display; the server's times are official)
+  const li = Math.floor(me.total / track.len);
+  if (g.lapIdx === undefined || li < g.lapIdx) g.lapIdx = li;
+  if (li > g.lapIdx) { g.lapIdx = li; g.lapStart = now; }
+  if (!me.fin) {
+    panel(16, 108, 168, 58);
+    ctx.font = '600 12px Inter,sans-serif'; ctx.fillStyle = '#a8a3b5';
+    ctx.fillText('LAP', 28, 116); ctx.fillText('LAST', 28, 133); ctx.fillText('BEST', 28, 150);
+    ctx.font = '700 13px Inter,sans-serif'; ctx.fillStyle = '#fff';
+    ctx.fillText(g.lapStart ? fmtTime(now - g.lapStart) : '-', 80, 116);
+    ctx.fillText(g.lastLap ? fmtTime(g.lastLap) : '-', 80, 133);
+    ctx.fillStyle = '#ffc53d'; ctx.fillText(g.bestLap ? fmtTime(g.bestLap) : '-', 80, 150);
+  }
 
   // item slot
   const ix = W - 96, iy = 16;

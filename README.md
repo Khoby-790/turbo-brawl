@@ -22,6 +22,14 @@ Desert Dash, Alpine Pass, Palm Beach, Downtown Dusk), lobby chat, and touch cont
     npm install
     npm start          # http://localhost:3000
 
+## Leaderboard
+Every lap is timed on the server. The best lap per driver on each track (top 10) is saved to
+`data/leaderboard.json`, or to `$DATA_DIR/leaderboard.json` if the `DATA_DIR` environment variable is set.
+See it from the 🏆 Leaderboard button, or as JSON at `/api/leaderboard`.
+
+On hosts with a temporary filesystem (like Render's free plan) the file is wiped on each restart/redeploy.
+To keep records, attach a persistent disk and set `DATA_DIR` to its mount path (e.g. `/var/data`).
+
 ## Play with friends
 Create a race, click **Copy invite link**, send it. Friends open the link, type a name and join.
 The host picks track / laps / CPU count and starts the race.
