@@ -11,37 +11,14 @@ const ADDONS = path.join(__dirname, 'node_modules', 'three', 'examples', 'jsm');
 const MAX_CARS = 8;
 const COLORS = ['#e6372e', '#2f7de1', '#f2c12e', '#35b04a', '#a24de0', '#ff8a1f', '#1fc8c8', '#ff4fa3'];
 const BOT_NAMES = ['Blaze', 'Nitro', 'Dusty', 'Vroom', 'Sparky', 'Crusher', 'Zippy', 'Torque'];
-// ---------- leaderboard (best lap per driver per track, saved to disk) ----------
-const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
-const BOARD_FILE = path.join(DATA_DIR, 'leaderboard.json');
-const BOARD_SIZE = 10;
-let board = {};
-try { board = JSON.parse(fs.readFileSync(BOARD_FILE, 'utf8')) || {}; } catch { board = {}; }
-let saveTimer = null;
-function saveBoard() {
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    fs.mkdir(DATA_DIR, { recursive: true }, () => {
-      const tmp = BOARD_FILE + '.tmp';
-      fs.writeFile(tmp, JSON.stringify(board), err => { if (!err) fs.rename(tmp, BOARD_FILE, () => {}); else console.error('leaderboard save failed', err.message); });
-    });
-  }, 1000);
-}
-// Returns the driver's rank on the board (1-based) if the lap made it, else 0.
-function submitLap(trackName, name, car, ms) {
-  const list = board[trackName] || (board[trackName] = []);
-  const key = name.toLowerCase();
-  const prev = list.find(e => e.name.toLowerCase() === key);
-  if (prev && prev.ms <= ms) return 0;
-  const next = list.filter(e => e.name.toLowerCase() !== key);
-  next.push({ name, car, ms, at: Date.now() });
-  next.sort((a, b) => a.ms - b.ms);
-  board[trackName] = next.slice(0, BOARD_SIZE);
-  const rank = board[trackName].findIndex(e => e.name.toLowerCase() === key) + 1;
-  if (rank) saveBoard();
-  return rank;
-}
-const trackRecord = name => (board[name] && board[name][0]) || null;
+// ---------- leaderboard (Postgres via DATABASE_URL, else a local file) ----------
+const { createLeaderboard } = require('./leaderboard');
+const leaderboard = createLeaderboard({
+  databaseUrl: process.env.DATABASE_URL,
+  dataDir: process.env.DATA_DIR || path.join(__dirname, 'data'),
+});
+const submitLap = (track, name, car, ms) => leaderboard.submit(track, name, car, ms);
+const trackRecord = name => leaderboard.record(name);
 
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon' };
 
@@ -51,7 +28,7 @@ const server = http.createServer((req, res) => {
   if (url === '/') url = '/index.html';
   if (url === '/api/leaderboard') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    return res.end(JSON.stringify({ tracks: S.TRACKS.map(t => t.name), board }));
+    return res.end(JSON.stringify({ tracks: S.TRACKS.map(t => t.name), board: leaderboard.all() }));
   }
   if (url.startsWith('/vendor/addons/')) {
     const file = path.normalize(path.join(ADDONS, url.slice('/vendor/addons/'.length)));
@@ -454,4 +431,6 @@ wss.on('connection', ws => {
   });
 });
 
-server.listen(PORT, () => console.log(`Turbo Brawl running on http://localhost:${PORT}`));
+leaderboard.init().finally(() => {
+  server.listen(PORT, () => console.log(`Turbo Brawl running on http://localhost:${PORT}`));
+});

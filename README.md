@@ -23,12 +23,23 @@ Desert Dash, Alpine Pass, Palm Beach, Downtown Dusk), lobby chat, and touch cont
     npm start          # http://localhost:3000
 
 ## Leaderboard
-Every lap is timed on the server. The best lap per driver on each track (top 10) is saved to
-`data/leaderboard.json`, or to `$DATA_DIR/leaderboard.json` if the `DATA_DIR` environment variable is set.
-See it from the 🏆 Leaderboard button, or as JSON at `/api/leaderboard`.
+Every lap is timed on the server; the best lap per driver on each track is kept, and the top 10
+are shown from the 🏆 Leaderboard button (JSON at `/api/leaderboard`).
 
-On hosts with a temporary filesystem (like Render's free plan) the file is wiped on each restart/redeploy.
-To keep records, attach a persistent disk and set `DATA_DIR` to its mount path (e.g. `/var/data`).
+**Storage**
+- If the `DATABASE_URL` environment variable is set, records go to that PostgreSQL database and
+  survive restarts and redeploys. The table (`lap_records`) is created automatically.
+- Otherwise they go to `data/leaderboard.json` (or `$DATA_DIR/leaderboard.json`), which is wiped on
+  hosts with temporary disks such as Render's free plan.
+
+**Free database setup (Neon)**
+1. Sign up at https://neon.tech (free plan) and create a project.
+2. Copy the connection string from the dashboard (it looks like
+   `postgresql://user:password@ep-xxxx.region.aws.neon.tech/neondb?sslmode=require`).
+3. In Render: your service -> **Environment** -> add `DATABASE_URL` with that value -> save (Render redeploys).
+4. The server log should say `Leaderboard: using PostgreSQL`.
+
+Any PostgreSQL host works the same way (Supabase, Render Postgres, etc.).
 
 ## Play with friends
 Create a race, click **Copy invite link**, send it. Friends open the link, type a name and join.
