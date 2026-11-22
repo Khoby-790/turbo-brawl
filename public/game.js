@@ -1,5 +1,6 @@
-import * as THREE from '/vendor/three.module.js';
+import * as THREE from 'three';
 import { Snd } from './audio.js';
+import { Q, QNAME, makeComposer, saveQuality } from './gfx.js';
 import { buildWorld, makeCarMesh, poseCar, makeBoxMesh, makeRocketMesh, makeOilMesh, Particles, Skids, isTouch } from './world.js';
 
 const S = window.Shared;
@@ -7,17 +8,31 @@ const $ = id => document.getElementById(id);
 
 // ---------------- renderer / canvases ----------------
 const gl = $('gl'), hud = $('c'), ctx = hud.getContext('2d');
-const renderer = new THREE.WebGLRenderer({ canvas: gl, antialias: !isTouch, powerPreference: 'high-performance' });
+// with post-processing on, anti-aliasing happens in the composer (SMAA/FXAA)
+const renderer = new THREE.WebGLRenderer({ canvas: gl, antialias: !Q.post && !isTouch, powerPreference: 'high-performance' });
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
 const camera = new THREE.PerspectiveCamera(64, 1, 1.5, 12000);
-let W = 0, H = 0, DPR = 1;
+let W = 0, H = 0, DPR = 1, post = null, postScene = null;
+// render through the post-processing chain when the quality preset has one
+function render(scene, speed, now) {
+  renderer.toneMappingExposure = scene.userData.exposure || 1.05;
+  if (Q.post && !post) post = makeComposer(renderer, scene, camera, W, H);
+  if (post) {
+    if (postScene !== scene) { post.setScene(scene); postScene = scene; }
+    const u = post.grade.material.uniforms;
+    u.speed.value = speed; u.time.value = now / 1000;
+    const tint = scene.userData.tint || [1, 1, 1]; u.tint.value.set(tint[0], tint[1], tint[2]);
+    post.composer.render();
+  } else renderer.render(scene, camera);
+}
 function resize() {
   W = innerWidth; H = innerHeight; DPR = Math.min(2, devicePixelRatio || 1);
-  renderer.setPixelRatio(Math.min(DPR, isTouch ? 1.5 : 2));
+  renderer.setPixelRatio(Math.min(DPR, Q.pr));
   renderer.setSize(W, H, false);
+  if (post) post.setSize(W, H);
   hud.width = W * DPR; hud.height = H * DPR;
   camera.aspect = W / H; camera.updateProjectionMatrix();
 }
@@ -93,6 +108,8 @@ function join(room) {
   $('menuErr').textContent = '';
   connect(() => send({ t: 'join', name, room }));
 }
+$('gfxSel').value = QNAME;
+$('gfxSel').onchange = () => { saveQuality($('gfxSel').value); location.reload(); };
 $('createBtn').onclick = () => join('');
 $('joinBtn').onclick = () => {
   const c = $('roomCode').value.trim().toUpperCase();
@@ -549,7 +566,12 @@ function updateCamera(dt) {
   const w = g.world;
   w.sun.position.set(me.x + w.sunOff.x, w.sunOff.y, me.y + w.sunOff.z);
   w.sun.target.position.set(me.x, 0, me.y);
-  w.scene.userData.sky.position.copy(camera.position);
+  // debug-only showroom camera used by automated screenshots
+  if (window.__camOverride) {
+    const o = window.__camOverride, a = me.a + o.ang;
+    camera.position.set(me.x + Math.cos(a) * o.dist, o.hgt, me.y + Math.sin(a) * o.dist);
+    camera.lookAt(me.x, 8, me.y); camera.fov = 45; camera.updateProjectionMatrix();
+  }
 }
 
 // attract mode: a camera drone flies along the current lobby track
@@ -563,8 +585,8 @@ function renderAttract(dt) {
   camera.lookAt(q.x, 0, q.y);
   camera.fov = 60; camera.updateProjectionMatrix();
   w.sun.position.set(p.x + w.sunOff.x, w.sunOff.y, p.y + w.sunOff.z); w.sun.target.position.set(p.x, 0, p.y);
-  w.scene.userData.sky.position.copy(camera.position);
-  renderer.render(w.scene, camera);
+  w.update(dt, camera, attract.t);
+  render(w.scene, 0, performance.now());
 }
 
 // ---------------- HUD ----------------
@@ -689,7 +711,9 @@ function frame(now) {
       poseCar(c.mesh, { x: c.x, y: c.y, z: c.z, a: c.a, sp: c.sp, steer: c.st, roll: c.roll, pitch: Math.max(-0.3, Math.min(0.3, ((c.tz || 0) - c.z) * 0.05)), braking: c.f & 8, boost: c.f & 2, shield: c.f & 4 }, dt);
     }
     updateCamera(dt);
-    renderer.render(game.scene, camera);
+    game.world.update(dt, camera, now / 1000);
+    const racing = now >= game.goAt;
+    render(game.scene, racing ? Math.max(0, (Math.hypot(me.vx, me.vy) - 350) / 600) + (me.boost > 0 ? 0.35 : 0) : 0, now);
     drawHud(now);
   } else {
     renderAttract(dt);

@@ -7,6 +7,7 @@ const S = require('./public/shared.js');
 const PORT = process.env.PORT || 3000;
 const PUBLIC = path.join(__dirname, 'public');
 const THREE_PATH = path.join(__dirname, 'node_modules', 'three', 'build', 'three.module.min.js');
+const ADDONS = path.join(__dirname, 'node_modules', 'three', 'examples', 'jsm');
 const MAX_CARS = 8;
 const COLORS = ['#e6372e', '#2f7de1', '#f2c12e', '#35b04a', '#a24de0', '#ff8a1f', '#1fc8c8', '#ff4fa3'];
 const BOT_NAMES = ['Blaze', 'Nitro', 'Dusty', 'Vroom', 'Sparky', 'Crusher', 'Zippy', 'Torque'];
@@ -16,6 +17,15 @@ const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css
 const server = http.createServer((req, res) => {
   let url = decodeURIComponent(req.url.split('?')[0]);
   if (url === '/') url = '/index.html';
+  if (url.startsWith('/vendor/addons/')) {
+    const file = path.normalize(path.join(ADDONS, url.slice('/vendor/addons/'.length)));
+    if (!file.startsWith(ADDONS + path.sep) || !file.endsWith('.js')) { res.writeHead(403); return res.end(); }
+    return fs.readFile(file, (err, data) => {
+      if (err) { res.writeHead(404); return res.end(); }
+      res.writeHead(200, { 'Content-Type': 'text/javascript', 'Cache-Control': 'public, max-age=86400' });
+      res.end(data);
+    });
+  }
   if (url === '/vendor/three.module.js') {
     return fs.readFile(THREE_PATH, (err, data) => {
       if (err) { res.writeHead(500); return res.end(); }

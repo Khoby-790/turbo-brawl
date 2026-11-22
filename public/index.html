@@ -74,6 +74,13 @@
       <button id="joinBtn" class="ghost">Join</button>
     </div>
     <div class="err" id="menuErr"></div>
+    <label for="gfxSel">Graphics</label>
+    <select id="gfxSel">
+      <option value="low">Low: fastest, for older phones</option>
+      <option value="medium">Medium: bloom and colour grading</option>
+      <option value="high">High: sky, reflections, grass, water</option>
+      <option value="ultra">Ultra: ambient occlusion, 4K shadows</option>
+    </select>
     <div class="keys">
       <kbd>↑</kbd><kbd>W</kbd> gas &nbsp; <kbd>↓</kbd><kbd>S</kbd> brake/reverse &nbsp; <kbd>←</kbd><kbd>→</kbd> steer<br>
       <kbd>Space</kbd> handbrake &nbsp; <kbd>E</kbd><kbd>Shift</kbd> use item &nbsp; <kbd>R</kbd> reset &nbsp; <kbd>C</kbd> camera<br>
@@ -115,6 +122,9 @@
   <div class="grp"><div class="tb item" data-k="fire">ITEM</div><div class="tb item" data-k="hand">HB</div><div class="tb" data-k="down">▼</div><div class="tb" data-k="up">▲</div></div>
 </div>
 
+<script type="importmap">
+  { "imports": { "three": "/vendor/three.module.js", "three/addons/": "/vendor/addons/" } }
+</script>
 <script src="shared.js"></script>
 <script type="module" src="game.js"></script>
 </body>
