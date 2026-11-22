@@ -99,14 +99,20 @@ export function makeComposer(renderer, scene, camera, W, H) {
 const SKY = {
   canyon: { elev: 14, azim: 205, turbidity: 6, rayleigh: 1.6, mie: 0.006, g: 0.8, exposure: 0.55, fog: 0xe2c9a6, tint: [1.06, 1.0, 0.93] },
   harbor: { elev: 30, azim: 320, turbidity: 2.2, rayleigh: 2.4, mie: 0.003, g: 0.8, exposure: 0.3, fog: 0x9dbdd6, tint: [1.02, 1.0, 0.98], fogNear: 3600 },
+  alpine: { elev: 24, azim: 'auto', turbidity: 1.8, rayleigh: 1.6, mie: 0.003, g: 0.8, exposure: 0.36, fog: 0xc5d3e4, tint: [0.97, 1.0, 1.05], fogNear: 3200 },
+  beach: { elev: 26, azim: 'auto', turbidity: 2.4, rayleigh: 2.2, mie: 0.004, g: 0.8, exposure: 0.33, fog: 0xa6cbe0, tint: [1.04, 1.0, 0.96], fogNear: 3400 },
+  city: { elev: 2.5, azim: 'auto', turbidity: 7, rayleigh: 3, mie: 0.012, g: 0.92, exposure: 0.85, fog: 0x6f5a6e, tint: [1.06, 0.96, 1.04], fogNear: 1800 },
   desert: { elev: 9, azim: 250, turbidity: 9, rayleigh: 2.2, mie: 0.008, g: 0.85, exposure: 0.55, fog: 0xe9c79a, tint: [1.08, 0.99, 0.9] },
 };
 export const skyInfo = theme => SKY[theme];
 
 // Adds a scattering sky (or a simple gradient on Low), returns the sun direction.
-export function addSky(scene, theme, renderer) {
+export function addSky(scene, theme, renderer, startAng = 0) {
   const cfg = SKY[theme];
-  const phi = THREE.MathUtils.degToRad(90 - cfg.elev), th = THREE.MathUtils.degToRad(cfg.azim);
+  // 'auto': put the sun behind (and a little to the side of) the starting straight
+  const back = startAng + Math.PI + 0.5;
+  const th = cfg.azim === 'auto' ? Math.atan2(Math.cos(back), Math.sin(back)) : THREE.MathUtils.degToRad(cfg.azim);
+  const phi = THREE.MathUtils.degToRad(90 - cfg.elev);
   const sunDir = new THREE.Vector3().setFromSphericalCoords(1, phi, th);
   let sky;
   if (Q.sky) {

@@ -1,7 +1,8 @@
 # Turbo Brawl
 
 Online multiplayer 3D combat racer. Up to 8 cars per room (friends + CPU drivers),
-power-up boxes (Turbo, Rocket, Oil Slick, Shield), 3 tracks, lobby chat, and touch controls for phones.
+power-up boxes (Turbo, Rocket, Oil Slick, Shield), 6 tracks (Canyon Loop, Harbor Hairpins,
+Desert Dash, Alpine Pass, Palm Beach, Downtown Dusk), lobby chat, and touch controls for phones.
 
 - 3D chase camera (Three.js) with a physically based sky, golden-hour lighting, clouds and lens flare
 - Post-processing: bloom, ambient occlusion (Ultra), colour grading, speed blur, SMAA/FXAA
